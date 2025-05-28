@@ -1,0 +1,38 @@
+{
+  "default_dataset": "sis-agrometeorological-indicators",
+  "datasets": {
+    "sis-agrometeorological-indicators": {
+      "format": "zip",
+      "version": "2_0",
+      "file_patterns": {
+        "ERA5_FILE": "_C3S-glob-agric_AgERA5_",
+        "ERA5_FILE_TYPE": "_final-v2.0.0.nc"
+      },
+      "variables": {
+        "t_max": {
+          "name": "2m_temperature",
+          "statistics": ["24_hour_maximum"],
+          "transform": "-",
+          "value": 273.15,
+          "output_dir": "2m_Maximum_Temperature",
+          "file_name": "Temperature-Air-2m_Max-24h"
+        },
+        "t_min": {
+          "name": "2m_temperature",
+          "statistics": ["24_hour_minimum"],
+          "transform": "-",
+          "value": 273.15,
+          "output_dir": "2m_Minimum_Temperature",
+          "file_name": "Temperature-Air-2m_Min-24h"
+        },
+        "sol_rad": {
+          "name": "solar_radiation_flux",
+          "transform": "/",
+          "value": 1000000,
+          "output_dir": "Solar_Radiation",
+          "file_name": "Solar-Radiation-Flux"
+        }
+      }
+    }
+  }
+}
