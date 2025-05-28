@@ -1,1 +1,2 @@
 from .era5_connector import CopernicusDownloader
+from .chirps_connector import ChirpsDownloader

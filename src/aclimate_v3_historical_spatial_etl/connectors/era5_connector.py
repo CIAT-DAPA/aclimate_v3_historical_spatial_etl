@@ -8,25 +8,27 @@ import calendar
 from datetime import datetime
 import xarray as xr
 import rioxarray
+import shutil
 
 class CopernicusDownloader:
-    def __init__(self, config_path: str, output_path: str,
-                 start_date: str, end_date: str, download_data_path: str):
+    def __init__(self, config_path: str,
+                 start_date: str, end_date: str, 
+                 download_data_path: str, keep_nc_files: bool = False):
         """
         Enhanced ERA5 data processor with support for multiple datasets and formats.
         
         Args:
             config_path: Path to configuration file
-            output_path: Base output directory
             start_date: Start date (YYYY-MM)
             end_date: End date (YYYY-MM)
             download_data_path: Temporary download directory
+            keep_nc_files: Whether to preserve NC files (default: False)
         """
         self.config = self._load_config(config_path)
-        self.output_path = Path(output_path)
         self.start_date = start_date
         self.end_date = end_date
         self.download_data_path = Path(download_data_path)
+        self.keep_nc_files = keep_nc_files
         
         self._initialize_paths()
         self.cds_client = cdsapi.Client(timeout=600)
@@ -35,15 +37,30 @@ class CopernicusDownloader:
         with open(config_path) as f:
             return json.load(f)
 
+    def _validate_paths(self):
+        """Ensure base directory exists"""
+        self.download_data_path.mkdir(parents=True, exist_ok=True)
+
+    def _organize_nc_files(self, year_path: Path):
+        """Move NC files to nc/ subfolder if keep_nc_files is True"""
+        if not self.keep_nc_files:
+            return
+            
+        nc_folder = year_path / "nc"
+        nc_folder.mkdir(exist_ok=True)
+        
+        for nc_file in year_path.glob("*.nc"):
+            try:
+                shutil.move(str(nc_file), str(nc_folder / nc_file.name))
+                print(f"\tMoved NC file to: {nc_folder/nc_file.name}")
+            except Exception as e:
+                print(f"\tError moving NC file: {str(e)}")
+
     def _initialize_paths(self):
-        self.era5_rasters_path = self.download_data_path / "rasters"
-        self.era5_rasters_path.mkdir(parents=True, exist_ok=True)
 
         for dataset in self.config['datasets'].values():
             for var_config in dataset['variables'].values():
                 (self.download_data_path / var_config['output_dir']).mkdir(parents=True, exist_ok=True)
-                (self.era5_rasters_path / var_config['output_dir']).mkdir(parents=True, exist_ok=True)
-                (self.output_path / var_config['output_dir']).mkdir(parents=True, exist_ok=True)
 
     def download_data(self, dataset_name: Optional[str] = None, 
                      variables: Optional[List[str]] = None,
@@ -152,106 +169,105 @@ class CopernicusDownloader:
 
     def netcdf_to_raster(self):
         """
-        Converts downloaded NetCDF files to raster format (.tif) for all configured variables.
-        Handles both uncompressed files and those within zip archives.
-        Uses configuration to determine file naming patterns and transformations.
+        Convert NC to TIFF and organize files by year.
+        Auto-deletes NC unless keep_nc_files=True.
         """
-        # Standard CRS definition for output rasters
         new_crs = '+proj=longlat +datum=WGS84 +no_defs'
-        
-        # Parse start and end dates
         start_year, start_month = map(int, self.start_date.split('-'))
         end_year, end_month = map(int, self.end_date.split('-'))
 
-        # Process each dataset and variable in the configuration
         for dataset_name, dataset_config in self.config['datasets'].items():
             for variable, var_config in dataset_config['variables'].items():
-                print(f"\nProcessing variable: {variable} from dataset {dataset_name}")
+                print(f"\nProcessing variable: {variable}")
                 
-                # Path where output rasters will be saved
-                raster_save_path = self.output_path / var_config['output_dir']
-                raster_save_path.mkdir(parents=True, exist_ok=True)
+                var_path = self.download_data_path / var_config['output_dir']
                 
-                # Path where downloaded NetCDFs are stored
-                download_path = self.download_data_path / var_config['output_dir']
-                
-                # Process each year in the date range
                 for year in range(start_year, end_year + 1):
-                    year_path = download_path / str(year)
-                    raster_year_path = raster_save_path / str(year)
-                    raster_year_path.mkdir(exist_ok=True)
+                    year_path = var_path / str(year)
+                    if not year_path.exists():
+                        continue
                     
-                    # Generate months to process based on date range
                     months = self._generate_month_range(year, start_year, start_month, end_year, end_month)
                     
-                    # Process each month
                     for month in months:
                         days = self._generate_days(year, int(month))
                         
-                        # Process each day
                         for day in days:
-                            # Build filename pattern based on dataset
-                            if dataset_name == "sis-agrometeorological-indicators":
-                                file_patterns = self.config['datasets'][dataset_name]['file_patterns']
-                                nc_filename = (
-                                    f"{var_config['file_name']}"
-                                    f"{file_patterns['ERA5_FILE']}"
-                                    f"{year}{month}{day}"
-                                    f"{file_patterns['ERA5_FILE_TYPE']}"
-                                )
-                            else:
-                                # For other datasets, use variable name as base
-                                nc_filename = f"{variable}_{year}{month}.nc"
+                            # Find NC file (supports multiple naming patterns)
+                            nc_patterns = [
+                                f"{variable}_{year}{month}.nc",
+                                f"{var_config.get('file_name','')}*{year}{month}{day}*.nc"
+                            ]
                             
-                            input_file = year_path / nc_filename
+                            nc_file = None
+                            for pattern in nc_patterns:
+                                matches = list(year_path.glob(pattern))
+                                if matches:
+                                    nc_file = matches[0]
+                                    break
                             
-                            # Skip if file doesn't exist
-                            if not input_file.exists():
-                                print(f"\tFile not found: {input_file}")
+                            if not nc_file or not nc_file.exists():
                                 continue
-                            
-                            print(f"\tConverting {input_file} to raster...")
-                            
-                            # Define output raster path
-                            output_file = raster_year_path / f"{var_config['output_dir']}_{year}{month}{day}.tif"
-                            
-                            # Skip if output already exists
-                            if output_file.exists():
-                                print(f"\tRaster already exists: {output_file}")
-                                continue
+                                
+                            # Generate TIFF path
+                            tif_file = year_path / f"{var_config['output_dir']}_{year}{month}{day}.tif"
                             
                             try:
-                                # Open and process NetCDF file
-                                xds = xr.open_dataset(input_file)
+                                # Conversion logic
+                                xds = xr.open_dataset(nc_file)
                                 
-                                # Apply transformations if defined in config
                                 if 'transform' in var_config and 'value' in var_config:
                                     if var_config['transform'] == "-":
                                         xds = xds - var_config['value']
                                     elif var_config['transform'] == "/":
                                         xds = xds / var_config['value']
                                 
-                                # Set CRS and save as raster
                                 xds.rio.write_crs(new_crs, inplace=True)
-                                variable_names = list(xds.variables)
                                 
-                                # Find the data variable (typically the 3rd or 4th)
-                                data_var = None
-                                for v in variable_names:
-                                    if v not in ['time', 'lat', 'lon', 'longitude', 'latitude', 'crs']:
-                                        data_var = v
-                                        break
+                                # Find data variable
+                                data_var = next((v for v in xds.variables 
+                                               if v not in ['time','lat','lon','longitude','latitude','crs']), None)
                                 
                                 if data_var:
-                                    xds[data_var].rio.to_raster(output_file)
-                                    print(f"\tSaved raster to {output_file}")
+                                    xds[data_var].rio.to_raster(tif_file)
+                                    print(f"Generated: {tif_file}")
+                                    
+                                    # Handle NC file
+                                    if not self.keep_nc_files:
+                                        nc_file.unlink()
                                 else:
-                                    print(f"\tNo data variable found in {input_file}")
+                                    print(f"No data variable in: {nc_file}")
                             
                             except Exception as e:
-                                print(f"\tError processing {input_file}: {str(e)}")
-        
-        print("\nConversion complete for all variables")
+                                print(f"Error processing {nc_file}: {str(e)}")
+                    
+                    # Organize remaining NC files
+                    self._organize_nc_files(year_path)
+
+    def clean_rasters(self):
+        """Optional cleanup of all generated TIFF files"""
+        print("\nCleaning all raster files...")
+        for dataset_config in self.config['datasets'].values():
+            for var_config in dataset_config['variables'].values():
+                var_path = self.download_data_path / var_config['output_dir']
+                
+                if var_path.exists():
+                    # Delete all TIFF files
+                    for tif_file in var_path.glob("**/*.tif"):
+                        try:
+                            tif_file.unlink()
+                            print(f"Deleted: {tif_file}")
+                        except Exception as e:
+                            print(f"Error deleting {tif_file}: {str(e)}")
+                    
+                    # Clean empty directories
+                    for year_dir in var_path.glob("*"):
+                        if year_dir.is_dir() and not any(year_dir.iterdir()):
+                            try:
+                                year_dir.rmdir()
+                                print(f"Removed empty: {year_dir}")
+                            except Exception as e:
+                                print(f"Error removing {year_dir}: {str(e)}")
 
 
     # Helper methods
@@ -273,5 +289,5 @@ class CopernicusDownloader:
 
     def main(self):
         """Main processing pipeline"""
-        #self.download_data()
+        self.download_data()
         self.netcdf_to_raster()
