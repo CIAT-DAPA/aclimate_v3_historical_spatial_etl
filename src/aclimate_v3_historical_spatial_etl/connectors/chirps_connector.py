@@ -37,7 +37,7 @@ class ChirpsDownloader:
     
     def _initialize_paths(self):
         """Create necessary directory structure"""
-        chirps_config = self.config['datasets']['CHIRPS']
+        chirps_config = next(iter(self.config['datasets'].values()))
         
         # Download paths
         self.chirps_path = self.download_data_path / chirps_config['output_dir']
@@ -49,7 +49,8 @@ class ChirpsDownloader:
     
     def _build_download_url(self, date: str) -> str:
         """Construct download URL from configuration and date"""
-        url_config = self.config['datasets']['CHIRPS']['url_config']
+        chirps_config = next(iter(self.config['datasets'].values()))
+        url_config = chirps_config['url_config']
         return (
             f"{url_config['base_url']}"
             f"{date.split('-')[0]}/"
@@ -93,28 +94,38 @@ class ChirpsDownloader:
     def download_data(self):
         """
         Download CHIRPS data for the specified date range in parallel.
-        Returns list of downloaded file paths.
+        Files are saved using the naming format defined in config.
+        Returns list of downloaded file paths (uncompressed).
         """
         dates = self.tools.generate_dates(self.start_date, self.end_date)
         download_paths = []
+        chirps_config = next(iter(self.config['datasets'].values()))
+        var_name = chirps_config['output_dir']  # e.g., "Precipitation"
+        naming_template = chirps_config.get('file_naming', "{variable}_{date}.tif.gz")
         
-        # Prepare download tasks
         for date in dates:
             year = date.split('-')[0]
             year_path = self.chirps_path / year
             year_path.mkdir(exist_ok=True)
             
             url = self._build_download_url(date)
-            filename = os.path.basename(url)
+            
+            # Format date for filename (remove dashes)
+            date_str = date.replace('-', '')  # e.g., '20200120'
+            
+            # Use naming template from config
+            filename = naming_template.format(variable=var_name, date=date_str)
+            
             save_path = year_path / filename
             download_paths.append(save_path)
         
-        # Execute downloads in parallel
+        # Download in parallel
         with ThreadPoolExecutor(max_workers=self.cores) as executor:
             urls = [self._build_download_url(date) for date in dates]
             executor.map(self._download_file, urls, download_paths)
         
-        return [p.with_suffix('') for p in download_paths]  # Return uncompressed paths
+        return [p.with_suffix('') for p in download_paths]  # uncompressed file paths
+
     
 
     def main(self):

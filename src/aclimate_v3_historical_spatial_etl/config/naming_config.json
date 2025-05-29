@@ -1,0 +1,15 @@
+{
+  "file_naming": {
+    "template": "climate_historical_{temporal}_{country}_{variable}_{date}.tif",
+    "components": {
+      "temporal": "daily",
+      "variable_mapping": {
+        "2m_Maximum_Temperature": "tmax",
+        "2m_Minimum_Temperature": "tmin",
+        "Solar_Radiation": "rad",
+        "Relative-Humidity-2m": "hum",
+        "Precipitation": "prec"
+      }
+    }
+  }
+}
