@@ -1,0 +1,1 @@
+from .aggregate_daily_data import MonthlyProcessor
