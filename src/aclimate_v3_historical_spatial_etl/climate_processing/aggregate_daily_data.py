@@ -147,13 +147,21 @@ class MonthlyProcessor:
                 ds = rioxarray.open_rasterio(f)
                 datasets.append(ds)
             
-            # Combine and compute monthly mean
+            # Combine the datasets
             combined = xr.concat(datasets, dim='time')
-            monthly_mean = combined.mean(dim='time', skipna=True)
+            
+            # Check if the variable is precipitation (or similar)
+            # You might need to adjust this condition based on how your variables are named
+            if variable.lower() in ['prec', 'precipitation']:
+                # For precipitation, calculate the sum (accumulation)
+                monthly_data = combined.sum(dim='time', skipna=True)
+            else:
+                # For all other variables, calculate the mean
+                monthly_data = combined.mean(dim='time', skipna=True)
             
             # Write output
-            monthly_mean.rio.to_raster(output_file)
-            print(f"Saved monthly average: {output_file}")
+            monthly_data.rio.to_raster(output_file)
+            print(f"Saved monthly data: {output_file}")
             
         except Exception as e:
             print(f"Error processing {variable} {year_month}: {str(e)}")
