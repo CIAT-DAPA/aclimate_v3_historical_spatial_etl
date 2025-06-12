@@ -43,6 +43,12 @@ class ClimatologyProcessor:
         # Validate and get GeoServer configuration from environment
         self._validate_geoserver_envs()
         self.geoserver_url = os.getenv('GEOSERVER_URL').rstrip('/')
+
+        if self.geoserver_url.endswith('/rest'):
+            self.geoserver_url = self.geoserver_url[:-5]
+        else:
+            self.geoserver_url = self.geoserver_url.replace('/rest/', '/').rstrip('/')
+
         self.geoserver_user = os.getenv('GEOSERVER_USER')
         self.geoserver_password = os.getenv('GEOSERVER_PASSWORD')
         
@@ -77,7 +83,7 @@ class ClimatologyProcessor:
         self._load_countries_config(countries_config_path, country)
         
         # Create output directory
-        self.output_path = self.output_path / "climatology_data"
+        self.output_path = self.output_path
         self.output_path.mkdir(parents=True, exist_ok=True)
         
         # Temporary directory for downloads
@@ -293,7 +299,7 @@ class ClimatologyProcessor:
             
             # Generate output filename
             output_filename = self._generate_climatology_name(month)
-            output_path = self.output_path / self.geoserver_store / output_filename
+            output_path = self.output_path / self.variable / output_filename
             output_path.parent.mkdir(parents=True, exist_ok=True)
             
             print(f"Saving climatology for month {month} to {output_path}")

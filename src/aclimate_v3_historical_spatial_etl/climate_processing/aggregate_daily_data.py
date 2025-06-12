@@ -30,7 +30,7 @@ class MonthlyProcessor:
         self.output_path = Path(output_path) if isinstance(output_path, str) else output_path
         naming_config_path = Path(naming_config_path) if isinstance(naming_config_path, str) else naming_config_path
         countries_config_path = Path(countries_config_path) if isinstance(countries_config_path, str) else countries_config_path
-        self.output_path = self.output_path / "monthly_data"
+        self.output_path = self.output_path
         # Validate paths
         if not self.input_path.exists():
             raise ValueError(f"Input path does not exist: {self.input_path}")

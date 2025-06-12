@@ -7,7 +7,6 @@
         "2m_Maximum_Temperature": "tmax",
         "2m_Minimum_Temperature": "tmin",
         "Solar_Radiation": "rad",
-        "Relative-Humidity-2m": "hum",
         "Precipitation": "prec"
       }
     }
