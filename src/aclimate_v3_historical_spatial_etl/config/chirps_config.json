@@ -1,0 +1,19 @@
+{
+  "default_dataset": "CHIRPS",
+  "parallel_downloads": 4,
+  "datasets": {
+    "prec": {
+      "output_dir": "Precipitation",
+      "file_format": "tif",
+      "compression": "gz",
+      "file_naming": "{variable}_{date}.tif.gz",
+      "url_config": {
+        "base_url": "https://data.chc.ucsb.edu/products/CHIRPS-2.0/global_daily/tifs/p05/",
+        "file_pattern": "chirps-v2.0.date.tif.gz"
+      },
+      "processing": {
+        "crs": "+proj=longlat +datum=WGS84 +no_defs"
+      }
+    }
+  }
+}
