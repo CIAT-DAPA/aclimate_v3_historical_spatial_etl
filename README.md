@@ -79,7 +79,7 @@ run_etl_pipeline(
 
 ```
 
-## Directory Structure (Auto-generated) 🗂️
+## 🗂️ Directory Structure (Auto-generated)
 
 ```bash
 data/
