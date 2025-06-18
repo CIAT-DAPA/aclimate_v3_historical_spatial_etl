@@ -126,7 +126,7 @@ class MonthlyProcessor:
                  component="processing",
                  variable=variable,
                  year_month=year_month,
-                 filename=filename)
+                 output_name=filename)
                 
             return filename
             

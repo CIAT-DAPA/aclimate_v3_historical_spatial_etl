@@ -180,7 +180,7 @@ class ClimatologyProcessor:
             info("Generated climatology filename",
                  component="processing",
                  month=month,
-                 filename=filename)
+                 output_name=filename)
                 
             return filename
             

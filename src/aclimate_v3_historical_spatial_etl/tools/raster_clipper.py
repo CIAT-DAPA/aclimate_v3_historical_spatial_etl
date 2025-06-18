@@ -129,7 +129,7 @@ class RasterClipper:
                  component="processing",
                  variable=var_name,
                  date=date_str,
-                 filename=filename)
+                 output_name=filename)
             return filename
             
         except Exception as e:
