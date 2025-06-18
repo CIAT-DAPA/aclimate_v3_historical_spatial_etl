@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="aclimate_v3_historical_spatial_etl",
-    version='v3.0.0',
+    version='v0.0.1',
     author="santiago123x",
     author_email="s.calderon@cgiar.com",
     description="ETL pipeline designed to download, extract, and prepare historical spatial data for integration into GeoServer.",
