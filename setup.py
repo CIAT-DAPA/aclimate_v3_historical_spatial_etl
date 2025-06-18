@@ -67,7 +67,5 @@ setup(
         "tzdata==2025.2",
         "urllib3==2.4.0",
         "xarray==2025.4.0",
-        "git+https://github.com/CIAT-DAPA/aclimate_v3_cut_spatial_data",
-        "git+https://github.com/CIAT-DAPA/aclimate_v3_spatial_importer"
     ]
 )
