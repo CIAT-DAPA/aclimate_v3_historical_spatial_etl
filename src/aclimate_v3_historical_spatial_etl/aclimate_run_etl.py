@@ -1,6 +1,3 @@
-from .connectors import CopernicusDownloader, ChirpsDownloader
-from .tools import RasterClipper, GeoServerUploadPreparer
-from .climate_processing import MonthlyProcessor, ClimatologyProcessor
 
 import argparse
 from pathlib import Path
@@ -9,12 +6,18 @@ from typing import Dict, List, Optional
 import shutil
 import sys
 import json
+from .connectors import CopernicusDownloader, ChirpsDownloader
+from .tools import RasterClipper, GeoServerUploadPreparer, logging_manager, error, info, warning
+from .climate_processing import MonthlyProcessor, ClimatologyProcessor
+
+
 class ETLError(Exception):
     """Custom exception for ETL pipeline errors"""
     pass
-
+#python -m src.aclimate_v3_historical_spatial_etl.aclimate_run_etl --country HONDURAS --start_date 2025-04 --end_date 2025-04 --data_path "D:\\Code\\aclimate_v3_historical_spatial_etl\\data_test"
 def parse_args():
     """Parse simplified command line arguments."""
+    info("Parsing command line arguments", component="setup")
     parser = argparse.ArgumentParser(description="Climate Data ETL Pipeline")
     
     # Required arguments
@@ -28,20 +31,38 @@ def parse_args():
     parser.add_argument("--climatology", action="store_true", help="Calculate climatology")
     parser.add_argument("--no_cleanup", action="store_true", help="Disable automatic cleanup")
     
-    return parser.parse_args()
+    args = parser.parse_args()
+    info("Command line arguments parsed successfully", 
+         component="setup",
+         args=vars(args))
+    return args
 
 def validate_dates(start_date: str, end_date: str):
     """Validate date format and range."""
     try:
+        info("Validating date range", 
+             component="validation",
+             start_date=start_date,
+             end_date=end_date)
+        
         start = datetime.strptime(start_date, "%Y-%m")
         end = datetime.strptime(end_date, "%Y-%m")
         if start > end:
             raise ValueError("Start date must be before end date")
+            
+        info("Date validation successful", component="validation")
     except ValueError as e:
+        error("Invalid date format", 
+              component="validation",
+              error=str(e))
         raise ETLError(f"Invalid date format. Use YYYY-MM. Error: {str(e)}")
 
 def setup_directory_structure(base_path: Path) -> Dict[str, Path]:
     """Create and validate the required directory structure."""
+    info("Setting up directory structure", 
+         component="setup",
+         base_path=str(base_path))
+    
     paths = {
         'config': base_path / "config",
         'raw_data': base_path / "raw_data",
@@ -62,6 +83,9 @@ def setup_directory_structure(base_path: Path) -> Dict[str, Path]:
     ]
     
     if not paths['config'].exists():
+        error("Config directory not found", 
+              component="setup",
+              path=str(paths['config']))
         raise ETLError(f"Config directory not found: {paths['config']}")
     
     missing_files = []
@@ -70,6 +94,9 @@ def setup_directory_structure(base_path: Path) -> Dict[str, Path]:
             missing_files.append(file)
     
     if missing_files:
+        error("Missing config files",
+              component="setup",
+              missing_files=missing_files)
         raise ETLError(f"Missing config files: {', '.join(missing_files)}")
     
     # Create other directories if they don't exist
@@ -77,7 +104,14 @@ def setup_directory_structure(base_path: Path) -> Dict[str, Path]:
         if key != 'config':
             try:
                 path.mkdir(parents=True, exist_ok=True)
+                info(f"Directory created/verified", 
+                     component="setup",
+                     path=str(path))
             except Exception as e:
+                error("Failed to create directory",
+                      component="setup",
+                      path=str(path),
+                      error=str(e))
                 raise ETLError(f"Could not create directory {path}: {str(e)}")
     
     return paths
@@ -85,6 +119,10 @@ def setup_directory_structure(base_path: Path) -> Dict[str, Path]:
 def load_config_with_iso2(config_path: Path, country: str) -> tuple:
     """Load both geoserver and clipping configs and extract ISO2 code."""
     try:
+        info("Loading configuration files", 
+             component="config",
+             country=country)
+        
         # Load clipping config to get ISO2 code
         with open(config_path / "clipping_config.json") as f:
             clipping_config = json.load(f)
@@ -92,10 +130,16 @@ def load_config_with_iso2(config_path: Path, country: str) -> tuple:
             # Get ISO2 code for the country
             country_data = clipping_config["countries"].get(country.upper())
             if not country_data:
+                error("Country not found in config",
+                      component="config",
+                      country=country)
                 raise ETLError(f"Country '{country}' not found in clipping_config.json")
             
             iso2 = country_data.get("iso2_code")
             if not iso2:
+                error("ISO2 code missing for country",
+                      component="config",
+                      country=country)
                 raise ETLError(f"No ISO2 code found for country '{country}'")
         
         # Load geoserver config
@@ -109,49 +153,85 @@ def load_config_with_iso2(config_path: Path, country: str) -> tuple:
                         if "[iso2]" in store_name:
                             data_type["stores"][var_name] = store_name.replace("[iso2]", iso2)
             
+            info("Configuration loaded successfully",
+                 component="config",
+                 iso2_code=iso2)
             return geoserver_config, iso2
             
     except json.JSONDecodeError as e:
+        error("Invalid JSON in config file",
+              component="config",
+              error=str(e))
         raise ETLError(f"Invalid JSON in config file: {str(e)}")
     except Exception as e:
+        error("Failed to load config files",
+              component="config",
+              error=str(e))
         raise ETLError(f"Could not read config files: {str(e)}")
 
 def get_variables_from_config(config_path: Path) -> List[str]:
     """Extract variables from naming config file."""
     try:
+        info("Extracting variables from config",
+             component="config")
+        
         with open(config_path / "naming_config.json") as f:
             config = json.load(f)
-            # Acceder al mapeo de variables anidado
             variable_mapping = config["file_naming"]["components"]["variable_mapping"]
-            return list(variable_mapping.keys())  # O values() si necesitas los códigos cortos
+            variables = list(variable_mapping.keys())
+            
+            info("Variables extracted successfully",
+                 component="config",
+                 variables=variables)
+            return variables
     except Exception as e:
+        error("Failed to extract variables from config",
+              component="config",
+              error=str(e))
         raise ETLError(f"Could not read variables from config: {str(e)}")
 
 def clean_directory(path: Path, force: bool = False):
     """Clean directory contents with safety checks."""
     if not path.exists():
-        print(f"Directory does not exist: {path}")
+        warning("Directory does not exist - skipping cleanup",
+               component="cleanup",
+               path=str(path))
         return
     
     if not force:
         response = input(f"Are you sure you want to clean {path}? [y/N]: ")
         if response.lower() != 'y':
-            print("Cleanup cancelled")
+            info("Cleanup cancelled by user",
+                 component="cleanup",
+                 path=str(path))
             return
     
     try:
+        items_deleted = 0
         for item in path.glob("*"):
             if item.is_file():
                 item.unlink()
+                items_deleted += 1
             elif item.is_dir():
                 shutil.rmtree(item)
-        print(f"Successfully cleaned {path}")
+                items_deleted += 1
+                
+        info("Directory cleanup completed",
+             component="cleanup",
+             path=str(path),
+             items_deleted=items_deleted)
     except Exception as e:
-        print(f"Error cleaning {path}: {str(e)}")
+        error("Failed to clean directory",
+              component="cleanup",
+              path=str(path),
+              error=str(e))
+        raise
 
 def run_etl_pipeline(args):
     """Execute the enhanced ETL pipeline with dynamic store naming."""
     try:
+        info("Starting ETL pipeline", component="main")
+        
         # Validate inputs
         validate_dates(args.start_date, args.end_date)
         
@@ -162,8 +242,10 @@ def run_etl_pipeline(args):
         # Load configurations with ISO2 code substitution
         geoserver_config, iso2 = load_config_with_iso2(paths['config'], args.country)
         variables = get_variables_from_config(paths['config'])
-        print(f"Processing variables: {', '.join(variables)}")
-        print(f"Using ISO2 code: {iso2}")
+        info("Configuration loaded",
+             component="main",
+             variables=variables,
+             iso2_code=iso2)
         
         # Initialize downloaders
         copernicus_downloader = None
@@ -171,7 +253,8 @@ def run_etl_pipeline(args):
         
         # Step 1: Data Download
         if not args.skip_download:
-            print("\n=== Downloading Data ===")
+            info("Starting data download phase", component="download")
+            
             copernicus_downloader = CopernicusDownloader(
                 config_path=paths['config'] / "copernicus_config.json",
                 start_date=args.start_date,
@@ -187,9 +270,11 @@ def run_etl_pipeline(args):
                 download_data_path=paths['raw_data']
             )
             chirps_downloader.main()
+            
+            info("Data download completed", component="download")
         
         # Step 2: Clipping Data
-        print("\n=== Clipping Data to Country Boundary ===")
+        info("Starting data clipping phase", component="clipping")
         clipper = RasterClipper(
             country=args.country,
             downloader_configs={
@@ -203,9 +288,10 @@ def run_etl_pipeline(args):
             base_download_path=paths['raw_data'],
             base_processed_path=paths['processed_data']
         )
+        info("Data clipping completed", component="clipping")
         
         # Step 3: Upload Processed Data to GeoServer
-        print("\n=== Uploading Processed Data to GeoServer ===")
+        info("Starting GeoServer upload for raw data", component="geoserver")
         preparer = GeoServerUploadPreparer(
             source_data_path=paths['processed_data'],
             upload_base_path=paths['upload_geoserver']
@@ -213,11 +299,17 @@ def run_etl_pipeline(args):
         
         raw_config = geoserver_config['raw_data']
         for variable in variables:
-            print(f"\nProcessing variable: {variable}")
+            info(f"Processing variable for GeoServer upload", 
+                 component="geoserver",
+                 variable=variable)
+            
             upload_dir = preparer.prepare_for_upload(variable)
             
             store_name = raw_config['stores'].get(variable)
             if not store_name:
+                error("No store name configured for variable",
+                      component="geoserver",
+                      variable=variable)
                 raise ETLError(f"No store name configured for variable {variable} in raw_data")
             
             preparer.upload_to_geoserver(
@@ -227,9 +319,11 @@ def run_etl_pipeline(args):
             )
             clean_directory(paths['upload_geoserver'], True)
         
+        info("Raw data GeoServer upload completed", component="geoserver")
+        
         # Step 4: Monthly Processing and Upload
-        if  args.climatology:
-            print("\n=== Processing Monthly Averages ===")
+        if args.climatology:
+            info("Starting monthly processing", component="processing")
             monthly_processor = MonthlyProcessor(
                 input_path=paths['processed_data'],
                 output_path=paths['monthly_data'],
@@ -239,7 +333,7 @@ def run_etl_pipeline(args):
             )
             monthly_processor.process_monthly_averages()
             
-            print("\n=== Uploading Monthly Data to GeoServer ===")
+            info("Starting monthly data GeoServer upload", component="geoserver")
             monthly_preparer = GeoServerUploadPreparer(
                 source_data_path=paths['monthly_data'],
                 upload_base_path=paths['upload_geoserver']
@@ -247,10 +341,17 @@ def run_etl_pipeline(args):
             
             monthly_config = geoserver_config['monthly_data']
             for variable in variables:
+                info(f"Processing monthly variable for GeoServer upload",
+                     component="geoserver",
+                     variable=variable)
+                
                 upload_dir = monthly_preparer.prepare_for_upload(f"{variable}")
                 
                 store_name = monthly_config['stores'].get(variable)
                 if not store_name:
+                    error("No store name configured for monthly variable",
+                          component="geoserver",
+                          variable=variable)
                     raise ETLError(f"No store name configured for variable {variable} in monthly_data")
                 
                 monthly_preparer.upload_to_geoserver(
@@ -260,13 +361,21 @@ def run_etl_pipeline(args):
                 )
                 clean_directory(paths['upload_geoserver'], True)
             
+            info("Monthly processing and upload completed", component="processing")
+            
             # Step 5: Climatology Calculation and Upload
-            print("\n=== Calculating Climatology ===")
+            info("Starting climatology calculation", component="processing")
             monthly_config = geoserver_config['monthly_data']
             for variable in variables:
-                # Get the store name for the current variable
+                info(f"Calculating climatology for variable",
+                     component="processing",
+                     variable=variable)
+                
                 store_name = monthly_config['stores'].get(variable)
                 if not store_name:
+                    error("No store name configured for climatology variable",
+                          component="processing",
+                          variable=variable)
                     raise ETLError(f"No store name configured for variable {variable} in climatology_data")
 
                 climatology_processor = ClimatologyProcessor(
@@ -281,7 +390,7 @@ def run_etl_pipeline(args):
                 )
                 climatology_processor.calculate_climatology()
             
-            print("\n=== Uploading Climatology Data to GeoServer ===")
+            info("Starting climatology data GeoServer upload", component="geoserver")
             clim_preparer = GeoServerUploadPreparer(
                 source_data_path=paths['climatology_data'],
                 upload_base_path=paths['upload_geoserver']
@@ -289,11 +398,17 @@ def run_etl_pipeline(args):
             
             clim_config = geoserver_config['climatology_data']
             for variable in variables:
+                info(f"Processing climatology variable for GeoServer upload",
+                     component="geoserver",
+                     variable=variable)
                     
                 upload_dir = clim_preparer.prepare_for_upload(f"{variable}")
                 
                 store_name = clim_config['stores'].get(variable)
                 if not store_name:
+                    error("No store name configured for climatology variable",
+                          component="geoserver",
+                          variable=variable)
                     raise ETLError(f"No store name configured for variable {variable} in climatology_data")
                 
                 clim_preparer.upload_to_geoserver(
@@ -302,10 +417,12 @@ def run_etl_pipeline(args):
                     date_format="yyyyMM"
                 )
                 clean_directory(paths['upload_geoserver'], True)
+            
+            info("Climatology processing and upload completed", component="processing")
         
         # Step 6: Cleanup
         if not args.no_cleanup:
-            print("\n=== Cleaning Up Temporary Files ===")
+            info("Starting cleanup phase", component="cleanup")
             
             if copernicus_downloader:
                 copernicus_downloader.clean_rasters()
@@ -314,14 +431,20 @@ def run_etl_pipeline(args):
             clean_directory(paths['processed_data'], True)
             clean_directory(paths['monthly_data'], True)
             clean_directory(paths['climatology_data'], True)
+            
+            info("Cleanup completed", component="cleanup")
         
-        print("\n=== ETL Pipeline Completed Successfully ===")
+        info("ETL pipeline completed successfully", component="main")
     
     except ETLError as e:
-        print(f"\nERROR: {str(e)}")
+        error("ETL pipeline failed",
+              component="main",
+              error=str(e))
         sys.exit(1)
     except Exception as e:
-        print(f"\nUNEXPECTED ERROR: {str(e)}")
+        error("Unexpected error in ETL pipeline",
+              component="main",
+              error=str(e))
         sys.exit(1)
 
 def main():

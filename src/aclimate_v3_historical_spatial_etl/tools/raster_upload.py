@@ -2,6 +2,7 @@ import os
 import shutil
 from pathlib import Path
 from aclimate_v3_spatial_importer import upload_image_mosaic
+from .logging_manager import error, info, warning
 
 class GeoServerUploadPreparer:
     def __init__(self, source_data_path, upload_base_path):
@@ -12,14 +13,22 @@ class GeoServerUploadPreparer:
             source_data_path (str): Path where original data is stored (structure: output/variable/year/tifs)
             upload_base_path (str): Base path where upload directory will be created
         """
-        self.source_data_path = Path(source_data_path)
-        self.upload_base_path = Path(upload_base_path)
-        self.upload_dir = self.upload_base_path / "upload_geoserver"
-        
-        print(f"Initialized upload preparer with:")
-        print(f"Source data path: {self.source_data_path}")
-        print(f"Upload base path: {self.upload_base_path}")
-        print(f"Final upload dir: {self.upload_dir}")
+        try:
+            self.source_data_path = Path(source_data_path)
+            self.upload_base_path = Path(upload_base_path)
+            self.upload_dir = self.upload_base_path / "upload_geoserver"
+            
+            info("GeoServerUploadPreparer initialized",
+                 component="initialization",
+                 source_data_path=str(self.source_data_path),
+                 upload_base_path=str(self.upload_base_path),
+                 upload_dir=str(self.upload_dir))
+                
+        except Exception as e:
+            error("Failed to initialize GeoServerUploadPreparer",
+                  component="initialization",
+                  error=str(e))
+            raise
     
     def prepare_for_upload(self, variable):
         """
@@ -37,62 +46,106 @@ class GeoServerUploadPreparer:
         Raises:
             ValueError: If directories are not found
         """
-        print(f"\nStarting preparation for variable: {variable}")
-        
-        # Create upload directory (and parent directories if needed)
-        print(f"Preparing upload directory: {self.upload_dir}")
-        self.upload_dir.mkdir(parents=True, exist_ok=True)
-        print("Upload directory ready")
-        
-        # Find source files
-        variable_dir = self.source_data_path / variable
-        if not variable_dir.exists():
-            error_msg = f"Variable directory not found: {variable_dir}"
-            print(f"ERROR: {error_msg}")
-            raise ValueError(error_msg)
+        try:
+            info("Starting upload preparation",
+                 component="preparation",
+                 variable=variable)
             
-        print(f"Scanning for TIFF files in: {variable_dir}")
-        
-        # Determine if we have year subdirectories or flat structure
-        tif_files = []
-        has_year_subdirs = False
-        
-        # Check if first level contains directories (potential year directories)
-        first_level_items = list(variable_dir.glob("*"))
-        if all(item.is_dir() for item in first_level_items):
-            print("Detected year subdirectory structure")
-            has_year_subdirs = True
-            year_count = 0
-            tif_count = 0
+            # Create upload directory
+            info("Creating upload directory",
+                 component="preparation",
+                 upload_dir=str(self.upload_dir))
+            self.upload_dir.mkdir(parents=True, exist_ok=True)
             
-            for year_dir in first_level_items:
-                year_count += 1
-                year_tifs = list(year_dir.glob("*.tif"))
-                tif_count += len(year_tifs)
-                tif_files.extend(year_tifs)
-                print(f"Found {len(year_tifs)} TIFFs in {year_dir.name}")
+            # Find source files
+            variable_dir = self.source_data_path / variable
+            if not variable_dir.exists():
+                error_msg = f"Variable directory not found: {variable_dir}"
+                error("Variable directory not found",
+                      component="preparation",
+                      variable=variable,
+                      path=str(variable_dir))
+                raise ValueError(error_msg)
                 
-            print(f"\nSummary (year subdirectories):")
-            print(f"Total years processed: {year_count}")
-            print(f"Total TIFF files found: {tif_count}")
-        else:
-            print("Detected flat directory structure (no year subdirectories)")
-            tif_files = list(variable_dir.glob("*.tif"))
-            print(f"Found {len(tif_files)} TIFF files directly in variable directory")
-        
-        if not tif_files:
-            print("Warning: No TIFF files found for upload")
+            info("Scanning for TIFF files",
+                 component="preparation",
+                 variable_dir=str(variable_dir))
+            
+            # Determine directory structure
+            tif_files = []
+            has_year_subdirs = False
+            first_level_items = list(variable_dir.glob("*"))
+            
+            if all(item.is_dir() for item in first_level_items):
+                info("Detected year subdirectory structure",
+                     component="preparation")
+                has_year_subdirs = True
+                year_count = 0
+                tif_count = 0
+                
+                for year_dir in first_level_items:
+                    year_count += 1
+                    year_tifs = list(year_dir.glob("*.tif"))
+                    tif_count += len(year_tifs)
+                    tif_files.extend(year_tifs)
+                    info(f"Found TIFFs in year directory",
+                         component="preparation",
+                         year=year_dir.name,
+                         file_count=len(year_tifs))
+                
+                info("Year subdirectory summary",
+                     component="preparation",
+                     years_processed=year_count,
+                     total_files=tif_count)
+            else:
+                info("Detected flat directory structure",
+                     component="preparation")
+                tif_files = list(variable_dir.glob("*.tif"))
+                info("Found TIFF files in variable directory",
+                     component="preparation",
+                     file_count=len(tif_files))
+            
+            if not tif_files:
+                warning("No TIFF files found for upload",
+                        component="preparation",
+                        variable=variable)
+                return self.upload_dir
+                
+            # Copy files to upload directory
+            info("Copying files to upload directory",
+                 component="preparation",
+                 file_count=len(tif_files))
+            
+            copied_count = 0
+            for tif in tif_files:
+                try:
+                    dest = self.upload_dir / tif.name
+                    shutil.copy2(tif, dest)
+                    copied_count += 1
+                    info("Copied file",
+                         component="preparation",
+                         source=str(tif),
+                         destination=str(dest))
+                except Exception as e:
+                    warning("Failed to copy file",
+                            component="preparation",
+                            file=str(tif),
+                            error=str(e))
+            
+            info("Upload preparation completed",
+                 component="preparation",
+                 variable=variable,
+                 files_copied=copied_count,
+                 upload_dir=str(self.upload_dir))
+                
             return self.upload_dir
             
-        # Copy files to upload directory (never move original files)
-        print("\nCopying files to upload directory...")
-        for tif in tif_files:
-            dest = self.upload_dir / tif.name
-            shutil.copy2(tif, dest)
-            print(f"Copied: {tif.name} -> {dest}")
-            
-        print(f"\nSuccessfully prepared {len(tif_files)} files in upload directory")
-        return self.upload_dir
+        except Exception as e:
+            error("Upload preparation failed",
+                  component="preparation",
+                  variable=variable,
+                  error=str(e))
+            raise
 
     def upload_to_geoserver(self, workspace, store, date_format="yyyyMM"):
         """
@@ -103,33 +156,57 @@ class GeoServerUploadPreparer:
             store (str): GeoServer store name
             date_format (str): Date format for time dimension
         """
-        print("\n=== Starting GeoServer Upload ===")
-        print(f"Uploading from: {self.upload_dir}")
-        print(f"Workspace: {workspace}")
-        print(f"Store: {store}")
-        print(f"Date format: {date_format}")
-        
         try:
+            info("Starting GeoServer upload",
+                 component="upload",
+                 workspace=workspace,
+                 store=store,
+                 date_format=date_format,
+                 source_dir=str(self.upload_dir))
+            
             upload_image_mosaic(
                 workspace=workspace,
                 store=store,
                 raster_dir=str(self.upload_dir),
                 date_format=date_format
             )
-            print("Upload completed successfully!")
+            
+            info("GeoServer upload completed successfully",
+                 component="upload",
+                 workspace=workspace,
+                 store=store)
+                
         except Exception as e:
-            print(f"Error during upload: {str(e)}")
+            error("GeoServer upload failed",
+                  component="upload",
+                  workspace=workspace,
+                  store=store,
+                  error=str(e))
             raise
 
     def clean_upload_dir(self):
         """Cleans the upload directory (commented out as requested)"""
-        print("\n=== Clean Upload Directory ===")
-        print(f"Would normally clean: {self.upload_dir}")
-        # if self.upload_dir.exists():
-        #     print("Removing all files from upload directory...")
-        #     shutil.rmtree(self.upload_dir)
-        #     self.upload_dir.mkdir()
-        #     print("Upload directory cleaned")
-        # else:
-        #     print("Upload directory doesn't exist - nothing to clean")
-        print("(Clean operation is currently commented out)")
+        try:
+            info("Starting upload directory cleanup",
+                 component="cleanup",
+                 upload_dir=str(self.upload_dir))
+            
+            if self.upload_dir.exists():
+                info("Removing files from upload directory",
+                     component="cleanup")
+                shutil.rmtree(self.upload_dir)
+                self.upload_dir.mkdir()
+                info("Upload directory cleaned",
+                     component="cleanup")
+            else:
+                info("Upload directory doesn't exist - nothing to clean",
+                     component="cleanup")
+            
+            info("Clean operation is currently commented out",
+                 component="cleanup")
+                
+        except Exception as e:
+            error("Failed to clean upload directory",
+                  component="cleanup",
+                  error=str(e))
+            raise
