@@ -114,6 +114,7 @@ Place these in your `config` directory:
 set GEOSERVER_URL=http://localhost:8086/geoserver/rest/
 set GEOSERVER_USER=admin
 set GEOSERVER_PASSWORD=password
+set OTLP_ENDPOINT=localhost:4317
 ```
 
 - Linux/Ubuntu:
@@ -123,7 +124,16 @@ set GEOSERVER_PASSWORD=password
 export GEOSERVER_URL=http://localhost:8086/geoserver/rest/
 export GEOSERVER_USER=admin
 export GEOSERVER_PASSWORD=password
+export OTLP_ENDPOINT=localhost:4317
 ```
+
+> [!NOTE]  
+>  Options:
+>
+> - `GEOSERVER_URL`: Geoserver URL
+> - `GEOSERVER_USER`: Geoserver user
+> - `GEOSERVER_PASSWORD`: Geoserver password
+> - `OTLP_ENDPOINT`: Signoz endpoint to send logs
 
 ## 🧪 Running Tests
 
