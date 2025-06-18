@@ -35,6 +35,8 @@ Python package for processing spatial historical climate data with a complete ET
 
 ```bash
 pip install git+https://github.com/CIAT-DAPA/aclimate_v3_historical_spatial_etl
+pip install git+https://github.com/CIAT-DAPA/aclimate_v3_cut_spatial_data.git
+pip install git+https://github.com/CIAT-DAPA/aclimate_v3_spatial_importer.git
 ```
 
 To install a specific version:
