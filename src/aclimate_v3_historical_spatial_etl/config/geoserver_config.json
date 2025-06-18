@@ -1,0 +1,29 @@
+{
+    "raw_data": {
+        "workspace": "climate_historical_daily",
+        "stores": {
+            "2m_Maximum_Temperature": "climate_historical_daily_[iso2]_tmax",
+            "2m_Minimum_Temperature": "climate_historical_daily_[iso2]_tmin",
+            "Precipitation": "climate_historical_daily_[iso2]_prec",
+            "Solar_Radiation": "climate_historical_daily_[iso2]_rad"
+        }
+    },
+    "monthly_data": {
+        "workspace": "climate_historical_monthly",
+        "stores": {
+            "2m_Maximum_Temperature": "climate_historical_monthly_[iso2]_tmax",
+            "2m_Minimum_Temperature": "climate_historical_monthly_[iso2]_tmin",
+            "Precipitation": "climate_historical_monthly_[iso2]_prec",
+            "Solar_Radiation": "climate_historical_monthly_[iso2]_rad"
+        }
+    },
+    "climatology_data": {
+        "workspace": "climate_historical_climatology",
+        "stores": {
+            "2m_Maximum_Temperature": "climate_historical_climatology_[iso2]_tmax",
+            "2m_Minimum_Temperature": "climate_historical_climatology_[iso2]_tmin",
+            "Precipitation": "climate_historical_climatology_[iso2]_prec",
+            "Solar_Radiation": "climate_historical_climatology_[iso2]_rad"
+        }
+    }
+}

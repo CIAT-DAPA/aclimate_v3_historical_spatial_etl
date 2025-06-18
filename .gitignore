@@ -3,9 +3,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.cpython
-
+/data_test
 # C extensions
 *.so
+
+gsconfig-py3/
 
 # Distribution / packaging
 .Python

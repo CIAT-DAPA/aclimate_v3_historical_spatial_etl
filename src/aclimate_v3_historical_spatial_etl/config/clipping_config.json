@@ -1,0 +1,19 @@
+{
+  "default_country": "HONDURAS",
+  "countries": {
+    "HONDURAS": {
+      "geoserver": {
+        "workspace": "test",
+        "layer": "test:honduras_level_1"
+      },
+      "iso2_code": "hn"
+    },
+    "COLOMBIA": {
+      "geoserver": {
+        "workspace": "colombia_ws",
+        "layer": "colombia:adm_level_1"
+      },
+      "iso2_code": "co"
+    }
+  }
+}
