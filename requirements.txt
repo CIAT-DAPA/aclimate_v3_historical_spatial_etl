@@ -44,5 +44,5 @@ typing_extensions==4.13.2
 tzdata==2025.2
 urllib3==2.4.0
 xarray==2025.4.0
-git+https://github.com/CIAT-DAPA/aclimate-v3-cut-spatial-data.git
-git+https://github.com/CIAT-DAPA/aclimate-v3-spatial-importer.git
+git+https://github.com/CIAT-DAPA/aclimate-v3-cut-spatial-data
+git+https://github.com/CIAT-DAPA/aclimate-v3-spatial-importer

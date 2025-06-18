@@ -9,6 +9,7 @@ from datetime import datetime
 import xarray as xr
 import rioxarray
 import shutil
+from ..tools import error, warning, info
 
 class CopernicusDownloader:
     def __init__(self, config_path: str,
@@ -32,14 +33,39 @@ class CopernicusDownloader:
         
         self._initialize_paths()
         self.cds_client = cdsapi.Client(timeout=600)
+        info("CopernicusDownloader initialized", 
+             component="downloader",
+             config_path=config_path,
+             date_range=f"{start_date} to {end_date}")
 
     def _load_config(self, config_path: str) -> Dict:
-        with open(config_path) as f:
-            return json.load(f)
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+            info("Configuration loaded successfully",
+                 component="config",
+                 config_path=config_path)
+            return config
+        except Exception as e:
+            error("Failed to load configuration",
+                  component="config",
+                  config_path=config_path,
+                  error=str(e))
+            raise
 
     def _validate_paths(self):
         """Ensure base directory exists"""
-        self.download_data_path.mkdir(parents=True, exist_ok=True)
+        try:
+            self.download_data_path.mkdir(parents=True, exist_ok=True)
+            info("Directory structure validated",
+                 component="setup",
+                 path=str(self.download_data_path))
+        except Exception as e:
+            error("Failed to validate directory structure",
+                  component="setup",
+                  path=str(self.download_data_path),
+                  error=str(e))
+            raise
 
     def _organize_nc_files(self, year_path: Path):
         """Move NC files to nc/ subfolder if keep_nc_files is True"""
@@ -47,20 +73,44 @@ class CopernicusDownloader:
             return
             
         nc_folder = year_path / "nc"
-        nc_folder.mkdir(exist_ok=True)
-        
-        for nc_file in year_path.glob("*.nc"):
-            try:
-                shutil.move(str(nc_file), str(nc_folder / nc_file.name))
-                print(f"\tMoved NC file to: {nc_folder/nc_file.name}")
-            except Exception as e:
-                print(f"\tError moving NC file: {str(e)}")
+        try:
+            nc_folder.mkdir(exist_ok=True)
+            moved_files = 0
+            
+            for nc_file in year_path.glob("*.nc"):
+                try:
+                    shutil.move(str(nc_file), str(nc_folder / nc_file.name))
+                    moved_files += 1
+                except Exception as e:
+                    warning("Failed to move NC file",
+                            component="cleanup",
+                            file=str(nc_file),
+                            error=str(e))
+            
+            info("NC files organized",
+                 component="cleanup",
+                 path=str(nc_folder),
+                 files_moved=moved_files)
+        except Exception as e:
+            warning("Failed to organize NC files",
+                    component="cleanup",
+                    path=str(year_path),
+                    error=str(e))
 
     def _initialize_paths(self):
-
-        for dataset in self.config['datasets'].values():
-            for var_config in dataset['variables'].values():
-                (self.download_data_path / var_config['output_dir']).mkdir(parents=True, exist_ok=True)
+        try:
+            for dataset in self.config['datasets'].values():
+                for var_config in dataset['variables'].values():
+                    path = self.download_data_path / var_config['output_dir']
+                    path.mkdir(parents=True, exist_ok=True)
+            info("Output directories initialized",
+                 component="setup",
+                 base_path=str(self.download_data_path))
+        except Exception as e:
+            error("Failed to initialize output directories",
+                  component="setup",
+                  error=str(e))
+            raise
 
     def download_data(self, dataset_name: Optional[str] = None, 
                      variables: Optional[List[str]] = None,
@@ -74,13 +124,25 @@ class CopernicusDownloader:
         start_year, start_month = map(int, self.start_date.split('-'))
         end_year, end_month = map(int, self.end_date.split('-'))
 
+        info("Starting data download",
+             component="download",
+             dataset=dataset_name,
+             variables=variables_to_process,
+             date_range=f"{self.start_date} to {self.end_date}")
+
         for variable in variables_to_process:
             var_config = dataset_config['variables'].get(variable)
             if not var_config:
-                print(f"Variable {variable} not found in dataset {dataset_name}")
+                warning("Variable not found in dataset",
+                       component="download",
+                       dataset=dataset_name,
+                       variable=variable)
                 continue
 
-            print(f"Processing {variable} from {dataset_name}")
+            info(f"Processing variable",
+                 component="download",
+                 variable=variable,
+                 dataset=dataset_name)
             
             for year in range(start_year, end_year + 1):
                 months = self._generate_month_range(year, start_year, start_month, end_year, end_month)
@@ -95,49 +157,68 @@ class CopernicusDownloader:
                         custom_days=days,
                         custom_times=times
                     )
+        
+        info("Data download completed",
+             component="download",
+             dataset=dataset_name)
+
     def _build_request(self, dataset_name: str, dataset_config: Dict, var_config: Dict,
                        year: int, month: str, days: List[str],
                        custom_times: Optional[List[str]] = None) -> Dict:
+        try:
+            request = {
+                'variable': [var_config['name']],
+                'year': [str(year)],
+                'month': [month],
+                'day': days
+            }
 
-        request = {
-            'variable': [var_config['name']],
-            'year': [str(year)],
-            'month': [month],
-            'day': days
-        }
+            # Add dataset-specific base parameters if they exist
+            if 'base_parameters' in dataset_config:
+                request.update(dataset_config['base_parameters'])
 
-        # Add dataset-specific base parameters if they exist
-        if 'base_parameters' in dataset_config:
-            request.update(dataset_config['base_parameters'])
+            if 'statistics' in var_config:
+                request['statistic'] = var_config['statistics']
 
-        if 'statistics' in var_config:
-            request['statistic'] = var_config['statistics']
+            # Add variable-specific additional parameters
+            if 'additional_params' in var_config:
+                request.update(var_config['additional_params'])
 
-        # Add variable-specific additional parameters
-        if 'additional_params' in var_config:
-            request.update(var_config['additional_params'])
+            # Handle format parameters
+            if 'format' in dataset_config:
+                request['format'] = dataset_config['format']
+            if 'data_format' in dataset_config:
+                request['data_format'] = dataset_config['data_format']
+            if 'download_format' in dataset_config:
+                request['format'] = dataset_config['download_format']
 
-        # Handle format parameters (data_format vs download_format)
-        if 'format' in dataset_config:
-            request['format'] = dataset_config['format']
-        if 'data_format' in dataset_config:
-            request['data_format'] = dataset_config['data_format']
-        if 'download_format' in dataset_config:
-            request['format'] = dataset_config['download_format']
+            # Only add version if it's explicitly defined in the dataset config
+            if 'version' in dataset_config:
+                request['version'] = dataset_config['version']
 
-        # Only add version if it's explicitly defined in the dataset config
-        if 'version' in dataset_config:
-            request['version'] = dataset_config['version']
+            # Override times if specified
+            if custom_times and 'time' in request:
+                request['time'] = custom_times
 
-        # Override times if specified
-        if custom_times and 'time' in request:
-            request['time'] = custom_times
+            # Special handling for time format in agromet dataset
+            if dataset_name == "sis-agrometeorological-indicators" and 'time' in request:
+                request['time'] = [t.replace(':', '_') for t in request['time']]
 
-        # Special handling for time format in agromet dataset
-        if dataset_name == "sis-agrometeorological-indicators" and 'time' in request:
-            request['time'] = [t.replace(':', '_') for t in request['time']]
+            info("Request parameters built",
+                 component="request",
+                 dataset=dataset_name,
+                 variable=var_config['name'],
+                 year=year,
+                 month=month)
+            return request
 
-        return request
+        except Exception as e:
+            error("Failed to build request parameters",
+                  component="request",
+                  dataset=dataset_name,
+                  variable=var_config.get('name'),
+                  error=str(e))
+            raise
 
     def _download_month(self, dataset_name: str, dataset_config: Dict,
                     variable: str, var_config: Dict, year: int, month: str,
@@ -154,18 +235,44 @@ class CopernicusDownloader:
         try:
             if dataset_config.get('format', '') == 'zip' or dataset_config.get('download_format', '') == 'zip':
                 zip_file = output_dir / f"{variable}_{year}{month}.zip"
+                info("Starting zip file download",
+                     component="download",
+                     file=str(zip_file))
+                
                 self.cds_client.retrieve(dataset_name, request, str(zip_file))
+                
+                info("Extracting zip file",
+                     component="download",
+                     file=str(zip_file))
                 with ZipFile(zip_file, 'r') as z:
                     z.extractall(output_dir)
                 zip_file.unlink()
+                info("Zip file processed and deleted",
+                     component="download",
+                     file=str(zip_file))
             else:
                 ext = dataset_config.get('format', 'nc')
                 filename = f"{variable}_{year}{month}.{ext}"
-                self.cds_client.retrieve(dataset_name, request, str(output_dir / filename))
+                output_path = output_dir / filename
+                info("Starting file download",
+                     component="download",
+                     file=str(output_path))
+                
+                self.cds_client.retrieve(dataset_name, request, str(output_path))
+                
+                info("File download completed",
+                     component="download",
+                     file=str(output_path),
+                     size=f"{os.path.getsize(output_path)/1024/1024:.2f}MB")
         
         except Exception as e:
-            print(f"Error downloading {variable} {year}-{month}: {str(e)}")
-
+            error("Download failed",
+                  component="download",
+                  dataset=dataset_name,
+                  variable=variable,
+                  year=year,
+                  month=month,
+                  error=str(e))
 
     def netcdf_to_raster(self):
         """
@@ -176,11 +283,20 @@ class CopernicusDownloader:
         start_year, start_month = map(int, self.start_date.split('-'))
         end_year, end_month = map(int, self.end_date.split('-'))
 
+        info("Starting NetCDF to raster conversion",
+             component="conversion",
+             keep_nc_files=self.keep_nc_files)
+
         for dataset_name, dataset_config in self.config['datasets'].items():
             for variable, var_config in dataset_config['variables'].items():
-                print(f"\nProcessing variable: {variable}")
+                info("Processing variable for conversion",
+                     component="conversion",
+                     dataset=dataset_name,
+                     variable=variable)
                 
                 var_path = self.download_data_path / var_config['output_dir']
+                files_converted = 0
+                files_failed = 0
                 
                 for year in range(start_year, end_year + 1):
                     year_path = var_path / str(year)
@@ -214,6 +330,11 @@ class CopernicusDownloader:
                             
                             try:
                                 # Conversion logic
+                                info("Converting NetCDF to raster",
+                                     component="conversion",
+                                     source=str(nc_file),
+                                     target=str(tif_file))
+                                
                                 xds = xr.open_dataset(nc_file)
                                 
                                 if 'transform' in var_config and 'value' in var_config:
@@ -230,23 +351,50 @@ class CopernicusDownloader:
                                 
                                 if data_var:
                                     xds[data_var].rio.to_raster(tif_file)
-                                    print(f"Generated: {tif_file}")
+                                    files_converted += 1
+                                    info("Raster conversion successful",
+                                         component="conversion",
+                                         file=str(tif_file))
                                     
                                     # Handle NC file
                                     if not self.keep_nc_files:
                                         nc_file.unlink()
+                                        info("Source NetCDF file deleted",
+                                             component="cleanup",
+                                             file=str(nc_file))
                                 else:
-                                    print(f"No data variable in: {nc_file}")
+                                    warning("No data variable found in NetCDF",
+                                            component="conversion",
+                                            file=str(nc_file))
+                                    files_failed += 1
                             
                             except Exception as e:
-                                print(f"Error processing {nc_file}: {str(e)}")
+                                error("Conversion failed",
+                                      component="conversion",
+                                      source=str(nc_file),
+                                      error=str(e))
+                                files_failed += 1
                     
                     # Organize remaining NC files
                     self._organize_nc_files(year_path)
+                
+                info("Variable conversion completed",
+                     component="conversion",
+                     dataset=dataset_name,
+                     variable=variable,
+                     files_converted=files_converted,
+                     files_failed=files_failed)
+
+        info("NetCDF to raster conversion completed",
+             component="conversion")
 
     def clean_rasters(self):
         """Optional cleanup of all generated TIFF files"""
-        print("\nCleaning all raster files...")
+        info("Starting raster cleanup", component="cleanup")
+        files_deleted = 0
+        dirs_removed = 0
+        errors = 0
+
         for dataset_config in self.config['datasets'].values():
             for var_config in dataset_config['variables'].values():
                 var_path = self.download_data_path / var_config['output_dir']
@@ -256,19 +404,32 @@ class CopernicusDownloader:
                     for tif_file in var_path.glob("**/*.tif"):
                         try:
                             tif_file.unlink()
-                            print(f"Deleted: {tif_file}")
+                            files_deleted += 1
                         except Exception as e:
-                            print(f"Error deleting {tif_file}: {str(e)}")
+                            error("Failed to delete file",
+                                  component="cleanup",
+                                  file=str(tif_file),
+                                  error=str(e))
+                            errors += 1
                     
                     # Clean empty directories
                     for year_dir in var_path.glob("*"):
                         if year_dir.is_dir() and not any(year_dir.iterdir()):
                             try:
                                 year_dir.rmdir()
-                                print(f"Removed empty: {year_dir}")
+                                dirs_removed += 1
                             except Exception as e:
-                                print(f"Error removing {year_dir}: {str(e)}")
+                                error("Failed to remove directory",
+                                      component="cleanup",
+                                      dir=str(year_dir),
+                                      error=str(e))
+                                errors += 1
 
+        info("Raster cleanup completed",
+             component="cleanup",
+             files_deleted=files_deleted,
+             directories_removed=dirs_removed,
+             errors_encountered=errors)
 
     # Helper methods
     def _generate_days(self, year: int, month: int) -> List[str]:
@@ -289,5 +450,13 @@ class CopernicusDownloader:
 
     def main(self):
         """Main processing pipeline"""
-        self.download_data()
-        self.netcdf_to_raster()
+        try:
+            info("Starting Copernicus downloader main pipeline", component="main")
+            self.download_data()
+            self.netcdf_to_raster()
+            info("Copernicus downloader pipeline completed successfully", component="main")
+        except Exception as e:
+            error("Copernicus downloader pipeline failed",
+                  component="main",
+                  error=str(e))
+            raise
