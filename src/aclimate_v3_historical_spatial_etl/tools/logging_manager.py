@@ -10,84 +10,98 @@ import os
 from dotenv import load_dotenv
 
 class LoggingManager:
-    """Centralized logging management with SigNoz/standard logging fallback."""
+    """Centralized logging management with file logging and SigNoz/standard logging fallback."""
     
-    def __init__(self, service_name: str = "historical_spatial_etl_service"):
+    def __init__(self, service_name: str = "historical_spatial_etl_service", log_file: str = None):
         load_dotenv()
         self.service_name = service_name
         self.endpoint = os.getenv('OTLP_ENDPOINT', 'localhost:4317')
         self._signoz_enabled = False
+        self.log_file = log_file or os.getenv('LOG_FILE_PATH', 'application.log')
         self._initialize_logging()
 
     def _initialize_logging(self):
-        """Initialize logging with SigNoz if available, otherwise standard logging."""
+        """Initialize logging with file logging and SigNoz if available."""
         # Basic standard logging setup
         self.logger = logging.getLogger(self.service_name)
         self.logger.setLevel(logging.INFO)
-
+        
+        # Clear existing handlers to avoid duplicates
+        self.logger.handlers.clear()
+        
+        # Create formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        
+        # File handler for persistent logs
+        try:
+            file_handler = logging.FileHandler(self.log_file)
+            file_handler.setFormatter(formatter)
+            file_handler.setLevel(logging.INFO)
+            self.logger.addHandler(file_handler)
+            
+            self.logger.info(
+                f"File logging configured successfully to {self.log_file}",
+                extra={'component': 'logging_setup'}
+            )
+        except Exception as file_log_error:
+            print(f"Failed to configure file logging: {str(file_log_error)}")
+        
         # Console handler as fallback
         console_handler = logging.StreamHandler()
-        console_handler.setFormatter(
-            logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        )
+        console_handler.setFormatter(formatter)
         self.logger.addHandler(console_handler)
 
         # Try SigNoz configuration
         try:
+            resource = Resource(attributes={
+                "service.name": self.service_name,
+                "service.version": "1.0",
+                "deployment.environment": "production"
+            })
 
-            try:
-                resource = Resource(attributes={
-                    "service.name": self.service_name,
-                    "service.version": "1.0",
-                    "deployment.environment": "production"
-                })
+            logger_provider = LoggerProvider(resource=resource)
+            _logs.set_logger_provider(logger_provider)
 
-                logger_provider = LoggerProvider(resource=resource)
-                _logs.set_logger_provider(logger_provider)
+            exporter = OTLPLogExporter(
+                endpoint=self.endpoint,
+                insecure=True
+            )
 
-                exporter = OTLPLogExporter(
-                    endpoint=self.endpoint,
-                    insecure=True
-                )
+            logger_provider.add_log_record_processor(
+                BatchLogRecordProcessor(exporter)
+            )
 
-                logger_provider.add_log_record_processor(
-                    BatchLogRecordProcessor(exporter)
-                )
+            class SigNozLogHandler(LoggingHandler):
+                def emit(self, record: logging.LogRecord) -> None:
+                    extra_data = getattr(record, 'extra', {})
+                    # Rename conflicting keys before passing to parent
+                    safe_extra = {}
+                    for key, value in extra_data.items():
+                        if key in ['args', 'msg', 'levelname', 'created']:
+                            safe_key = f"_{key}"
+                        else:
+                            safe_key = key
+                        safe_extra[safe_key] = value
+                    super().emit(record)
 
-                class SigNozLogHandler(LoggingHandler):
-                    def emit(self, record: logging.LogRecord) -> None:
-                        extra_data = getattr(record, 'extra', {})
-                        # Rename conflicting keys before passing to parent
-                        safe_extra = {}
-                        for key, value in extra_data.items():
-                            if key in ['args', 'msg', 'levelname', 'created']:
-                                safe_key = f"_{key}"
-                            else:
-                                safe_key = key
-                            safe_extra[safe_key] = value
-                        super().emit(record)
-
-                signoz_handler = SigNozLogHandler(
-                    logger_provider=logger_provider,
-                    level=logging.INFO
-                )
-                self.logger.addHandler(signoz_handler)
-                self._signoz_enabled = True
-                
-                self.logger.info(
-                    "SigNoz configured successfully",
-                    extra={'component': 'logging_setup'}
-                )
-                
-            except Exception as signoz_error:
-                self.logger.warning(
-                    f"Failed to configure SigNoz: {str(signoz_error)}",
-                    extra={'component': 'logging_setup'}
-                )
-
-        except ImportError:
+            signoz_handler = SigNozLogHandler(
+                logger_provider=logger_provider,
+                level=logging.INFO
+            )
+            self.logger.addHandler(signoz_handler)
+            self._signoz_enabled = True
+            
+            self.logger.info(
+                "SigNoz configured successfully",
+                extra={'component': 'logging_setup'}
+            )
+            
+        except Exception as signoz_error:
             self.logger.warning(
-                "OpenTelemetry not available - using standard logging",
+                f"Failed to configure SigNoz: {str(signoz_error)}",
                 extra={'component': 'logging_setup'}
             )
 
