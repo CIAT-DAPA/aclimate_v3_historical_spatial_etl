@@ -1,15 +1,18 @@
-import json
+import os
+import tempfile
+import shutil
 import pytest
 from pathlib import Path
-from unittest.mock import patch, mock_open
-from aclimate_v3_historical_spatial_etl.climate_processing import MonthlyProcessor
+from unittest.mock import patch, MagicMock
+from aclimate_v3_historical_spatial_etl.climate_processing import ClimatologyProcessor
 
+# Test configuration data
 DUMMY_NAMING_CONFIG = {
     "file_naming": {
         "template": "{temporal}_{country}_{variable}_{date}.tif",
         "components": {
             "variable_mapping": {
-                "precipitation": "prec"
+                "precipitation": "pr"
             }
         }
     }
@@ -24,64 +27,125 @@ DUMMY_COUNTRIES_CONFIG = {
     }
 }
 
-class TestMonthlyProcessor:
+@pytest.fixture
+def temp_output_dir():
+    dir_path = tempfile.mkdtemp()
+    yield Path(dir_path)
+    shutil.rmtree(dir_path)
 
-    @pytest.fixture
-    def config_paths(self, tmp_path):
-        naming_config = tmp_path / "naming.json"
-        countries_config = tmp_path / "countries.json"
+@patch.dict(os.environ, {
+    "GEOSERVER_URL": "https://example.com/geoserver",
+    "GEOSERVER_USER": "user",
+    "GEOSERVER_PASSWORD": "pass"
+})
+def test_initialization_success(temp_output_dir):
+    processor = ClimatologyProcessor(
+        geoserver_workspace="workspace",
+        geoserver_layer="layer",
+        geoserver_store="store",
+        output_path=temp_output_dir,
+        variable="precipitation",
+        naming_config=DUMMY_NAMING_CONFIG,
+        countries_config=DUMMY_COUNTRIES_CONFIG
+    )
 
-        naming_config.write_text(json.dumps(DUMMY_NAMING_CONFIG))
-        countries_config.write_text(json.dumps(DUMMY_COUNTRIES_CONFIG))
+    assert processor.template == "{temporal}_{country}_{variable}_{date}.tif"
+    assert processor.country_code == "hn"
+    assert processor.variable_mapping["precipitation"] == "pr"
+    assert processor.variable == "precipitation"
+    assert processor.output_path.exists()
 
-        return naming_config, countries_config
-
-    @pytest.fixture
-    def processor(self, tmp_path, config_paths):
-        input_dir = tmp_path / "input"
-        input_dir.mkdir()
-        output_dir = tmp_path / "output"
-        naming_config, countries_config = config_paths
-
-        return MonthlyProcessor(
-            input_path=input_dir,
-            output_path=output_dir,
-            naming_config_path=naming_config,
-            countries_config_path=countries_config,
-            country="HONDURAS"
+def test_generate_climatology_name(temp_output_dir):
+    with patch.dict(os.environ, {"GEOSERVER_URL": "http://test"}):
+        processor = ClimatologyProcessor(
+            geoserver_workspace="workspace",
+            geoserver_layer="layer",
+            geoserver_store="store",
+            output_path=temp_output_dir,
+            variable="precipitation",
+            naming_config=DUMMY_NAMING_CONFIG,
+            countries_config=DUMMY_COUNTRIES_CONFIG
         )
+    result = processor._generate_climatology_name("01")
+    assert result == "climatology_hn_pr_200001.tif"
 
-    def test_initialization_success(self, processor):
-        assert processor.input_path.exists()
-        assert processor.output_path.exists()
-        assert processor.template == "{temporal}_{country}_{variable}_{date}.tif"
-        assert processor.country_code == "hn"
-
-    def test_generate_output_name(self, processor):
-        filename = processor._generate_output_name("precipitation", "202301")
-        assert filename == "monthly_hn_prec_202301.tif"
-
-    def test_missing_input_path(self, tmp_path, config_paths):
-        invalid_input = tmp_path / "nonexistent"
-        naming_config, countries_config = config_paths
-        with pytest.raises(ValueError, match="Input path does not exist"):
-            MonthlyProcessor(
-                input_path=invalid_input,
-                output_path=tmp_path / "out",
-                naming_config_path=naming_config,
-                countries_config_path=countries_config,
-                country="HONDURAS"
+def test_missing_env_vars(temp_output_dir):
+    with patch.dict(os.environ, {}, clear=True):
+        with pytest.raises(ValueError, match="Missing required environment variables"):
+            ClimatologyProcessor(
+                geoserver_workspace="workspace",
+                geoserver_layer="layer",
+                geoserver_store="store",
+                output_path=temp_output_dir,
+                variable="precipitation",
+                naming_config=DUMMY_NAMING_CONFIG,
+                countries_config=DUMMY_COUNTRIES_CONFIG
             )
 
-    def test_missing_country_in_config(self, tmp_path, config_paths):
-        input_dir = tmp_path / "input"
-        input_dir.mkdir()
-        naming_config, countries_config = config_paths
-        with pytest.raises(ValueError, match="not found in configuration"):
-            MonthlyProcessor(
-                input_path=input_dir,
-                output_path=tmp_path / "out",
-                naming_config_path=naming_config,
-                countries_config_path=countries_config,
-                country="BRAZIL"
+def test_missing_country(temp_output_dir):
+    invalid_countries_config = {
+        "countries": {}  # No default country specified
+    }
+    
+    with patch.dict(os.environ, {"GEOSERVER_URL": "http://test"}):
+        with pytest.raises(ValueError, match="No country specified and no default country in config"):
+            ClimatologyProcessor(
+                geoserver_workspace="workspace",
+                geoserver_layer="layer",
+                geoserver_store="store",
+                output_path=temp_output_dir,
+                variable="precipitation",
+                naming_config=DUMMY_NAMING_CONFIG,
+                countries_config=invalid_countries_config
             )
+
+def test_calculate_climatology(temp_output_dir):
+    with patch.dict(os.environ, {"GEOSERVER_URL": "http://test"}):
+        processor = ClimatologyProcessor(
+            geoserver_workspace="workspace",
+            geoserver_layer="layer",
+            geoserver_store="store",
+            output_path=temp_output_dir,
+            variable="precipitation",
+            naming_config=DUMMY_NAMING_CONFIG,
+            countries_config=DUMMY_COUNTRIES_CONFIG
+        )
+        
+        # Mock GeoServer interactions
+        with patch.object(processor, 'get_dates_from_geoserver') as mock_dates, \
+             patch.object(processor, '_download_from_geoserver') as mock_download, \
+             patch('rioxarray.open_rasterio') as mock_open_rasterio, \
+             patch('xarray.concat') as mock_concat:
+            
+            mock_dates.return_value = ["2020-01-01", "2020-01-02"]
+            mock_download.return_value = temp_output_dir / "test.tif"
+            mock_open_rasterio.return_value = MagicMock()
+            mock_concat.return_value = MagicMock()
+            
+            results = processor.calculate_climatology()
+            
+            assert isinstance(results, dict)
+            assert mock_dates.called
+            assert mock_download.called
+
+def test_cleanup(temp_output_dir):
+    with patch.dict(os.environ, {"GEOSERVER_URL": "http://test"}):
+        processor = ClimatologyProcessor(
+            geoserver_workspace="workspace",
+            geoserver_layer="layer",
+            geoserver_store="store",
+            output_path=temp_output_dir,
+            variable="precipitation",
+            naming_config=DUMMY_NAMING_CONFIG,
+            countries_config=DUMMY_COUNTRIES_CONFIG
+        )
+        
+        # Create a mock open dataset
+        mock_ds = MagicMock()
+        processor._open_datasets.append(mock_ds)
+        
+        processor.cleanup()
+        
+        # Verify cleanup actions
+        mock_ds.close.assert_called_once()
+        assert len(processor._open_datasets) == 0
