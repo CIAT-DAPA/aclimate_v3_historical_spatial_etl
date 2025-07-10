@@ -1,5 +1,4 @@
-import json
-from unittest.mock import patch, mock_open
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 import pytest
 
@@ -25,36 +24,30 @@ DUMMY_CONFIG = {
 class TestCopernicusDownloaderInternal:
 
     @pytest.fixture
-    def dummy_config_path(self, tmp_path):
-        config_file = tmp_path / "config.json"
-        config_file.write_text(json.dumps(DUMMY_CONFIG))
-        return str(config_file)
-
-    @pytest.fixture
-    def downloader(self, tmp_path, dummy_config_path):
+    def downloader(self, tmp_path):
         with patch("cdsapi.Client"):
             return CopernicusDownloader(
-                config_path=dummy_config_path,
+                config=DUMMY_CONFIG,
                 start_date="2024-01",
                 end_date="2024-02",
                 download_data_path=str(tmp_path),
                 keep_nc_files=True
             )
 
-    def test_load_config_valid(self, dummy_config_path):
-        with patch("cdsapi.Client"), patch("builtins.open", mock_open(read_data=json.dumps(DUMMY_CONFIG))):
+    def test_initialize_with_config_dict(self, tmp_path):
+        with patch("cdsapi.Client"):
             downloader = CopernicusDownloader(
-                config_path=dummy_config_path,
+                config=DUMMY_CONFIG,
                 start_date="2024-01",
                 end_date="2024-01",
-                download_data_path="dummy_path"
+                download_data_path=str(tmp_path)
             )
             assert downloader.config["default_dataset"] == "test_dataset"
 
-    def test_initialize_paths_creates_dirs(self, tmp_path, dummy_config_path):
+    def test_initialize_paths_creates_dirs(self, tmp_path):
         with patch("cdsapi.Client"):
             downloader = CopernicusDownloader(
-                config_path=dummy_config_path,
+                config=DUMMY_CONFIG,
                 start_date="2024-01",
                 end_date="2024-01",
                 download_data_path=str(tmp_path)
@@ -97,3 +90,25 @@ class TestCopernicusDownloaderInternal:
         assert request["month"] == ["01"]
         assert request["day"] == ["01", "02"]
         assert request["format"] == "nc"
+
+    def test_netcdf_to_raster_conversion(self, tmp_path):
+        with patch("cdsapi.Client"), \
+             patch("xarray.open_dataset"), \
+             patch("rioxarray.raster_array.RasterArray.to_raster"):
+            
+            downloader = CopernicusDownloader(
+                config=DUMMY_CONFIG,
+                start_date="2024-01",
+                end_date="2024-01",
+                download_data_path=str(tmp_path)
+            )
+            
+            # Create dummy files for processing
+            var_dir = tmp_path / "temperature" / "2024"
+            var_dir.mkdir(parents=True)
+            (var_dir / "temperature_20240101.nc").touch()
+            
+            downloader.netcdf_to_raster()
+            
+            # Verify the output directory was created
+            assert (tmp_path / "temperature" / "2024").exists()

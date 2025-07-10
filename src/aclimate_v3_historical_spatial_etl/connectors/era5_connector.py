@@ -30,7 +30,6 @@ class CopernicusDownloader:
         self.download_data_path = Path(download_data_path)
         self.keep_nc_files = keep_nc_files
         self._initialize_paths()
-        self.cds_client = cdsapi.Client(timeout=600)
         info("CopernicusDownloader initialized", 
              component="downloader",
              date_range=f"{start_date} to {end_date}")
@@ -49,6 +48,50 @@ class CopernicusDownloader:
                   component="setup",
                   error=str(e))
             raise
+    
+    def _validate_paths(self):
+        """Ensure base directory exists"""
+        try:
+            self.download_data_path.mkdir(parents=True, exist_ok=True)
+            info("Directory structure validated",
+                 component="setup",
+                 path=str(self.download_data_path))
+        except Exception as e:
+            error("Failed to validate directory structure",
+                  component="setup",
+                  path=str(self.download_data_path),
+                  error=str(e))
+            raise
+
+    def _organize_nc_files(self, year_path: Path):
+        """Move NC files to nc/ subfolder if keep_nc_files is True"""
+        if not self.keep_nc_files:
+            return
+            
+        nc_folder = year_path / "nc"
+        try:
+            nc_folder.mkdir(exist_ok=True)
+            moved_files = 0
+            
+            for nc_file in year_path.glob("*.nc"):
+                try:
+                    shutil.move(str(nc_file), str(nc_folder / nc_file.name))
+                    moved_files += 1
+                except Exception as e:
+                    warning("Failed to move NC file",
+                            component="cleanup",
+                            file=str(nc_file),
+                            error=str(e))
+            
+            info("NC files organized",
+                 component="cleanup",
+                 path=str(nc_folder),
+                 files_moved=moved_files)
+        except Exception as e:
+            warning("Failed to organize NC files",
+                    component="cleanup",
+                    path=str(year_path),
+                    error=str(e))
 
     def download_data(self, dataset_name: Optional[str] = None, 
                      variables: Optional[List[str]] = None,
@@ -172,13 +215,14 @@ class CopernicusDownloader:
                                     year, month, days, custom_times)
 
         try:
+            cds_client = cdsapi.Client(timeout=800)
             if dataset_config.get('format', '') == 'zip' or dataset_config.get('download_format', '') == 'zip':
                 zip_file = output_dir / f"{variable}_{year}{month}.zip"
                 info("Starting zip file download",
                      component="download",
                      file=str(zip_file))
                 
-                self.cds_client.retrieve(dataset_name, request, str(zip_file))
+                cds_client.retrieve(dataset_name, request, str(zip_file))
                 
                 info("Extracting zip file",
                      component="download",
@@ -197,7 +241,7 @@ class CopernicusDownloader:
                      component="download",
                      file=str(output_path))
                 
-                self.cds_client.retrieve(dataset_name, request, str(output_path))
+                cds_client.retrieve(dataset_name, request, str(output_path))
                 
                 info("File download completed",
                      component="download",

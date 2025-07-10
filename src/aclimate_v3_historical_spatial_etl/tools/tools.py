@@ -18,11 +18,6 @@ class DownloadProgressBar(tqdm):
             if tsize is not None:
                 self.total = tsize
             self.update(b * bsize - self.n)
-            info("Download progress updated",
-                 component="download",
-                 blocks_transferred=b,
-                 block_size=bsize,
-                 total_size=tsize)
         except Exception as e:
             error("Failed to update download progress",
                   component="download",
@@ -70,47 +65,41 @@ class Tools():
     def generate_dates(self, start_date, end_date):
         """
         Generates a list of dates between two dates (inclusive).
-        
+        Handles both monthly (YYYY-MM) and daily (YYYY-MM-DD) formats.
+
         Args:
-            start_date (str): Start date in "YYYY-MM" format
-            end_date (str): End date in "YYYY-MM" format
-            
+            start_date (str): Start date in "YYYY-MM-DD" or "YYYY-MM" format
+            end_date (str): End date in "YYYY-MM-DD" or "YYYY-MM" format
+
         Returns:
             list: List of dates as strings in "YYYY-MM-DD" format
         """
         try:
-            info("Generating date range",
-                 component="date_utils",
-                 start_date=start_date,
-                 end_date=end_date)
-            
-            start_date = datetime.strptime(start_date, "%Y-%m")
-            end_date = datetime.strptime(end_date, "%Y-%m")
-            
-            # Adjust end date to last day of month
-            last_day = (end_date.replace(month=end_date.month % 12 + 1, day=1) - timedelta(days=1)).day
-            end_date = end_date.replace(day=last_day.day)
-            
+            # Parse start date
+            if len(start_date.split('-')) == 2:  # YYYY-MM format
+                start_date = datetime.strptime(start_date, "%Y-%m").replace(day=1)
+            else:  # YYYY-MM-DD format
+                start_date = datetime.strptime(start_date, "%Y-%m-%d")
+
+            # Parse end date
+            if len(end_date.split('-')) == 2:  # YYYY-MM format
+                end_date = datetime.strptime(end_date, "%Y-%m")
+                # Set to last day of month
+                next_month = end_date.replace(day=28) + timedelta(days=4)
+                end_date = next_month - timedelta(days=next_month.day)
+            else:  # YYYY-MM-DD format
+                end_date = datetime.strptime(end_date, "%Y-%m-%d")
+
+            # Generate all dates in range
             dates = []
-            current_date = start_date.replace(day=1)
-            
+            current_date = start_date
             while current_date <= end_date:
                 dates.append(current_date.strftime("%Y-%m-%d"))
                 current_date += timedelta(days=1)
-            
-            info("Date range generated",
-                 component="date_utils",
-                 date_count=len(dates),
-                 first_date=dates[0] if dates else None,
-                 last_date=dates[-1] if dates else None)
-            
+
             return dates
         except Exception as e:
-            error("Failed to generate dates",
-                  component="date_utils",
-                  start_date=start_date,
-                  end_date=end_date,
-                  error=str(e))
+            error("Date generation failed", error=str(e))
             raise
 
     def create_dir(self, path):

@@ -10,7 +10,6 @@ from .connectors import CopernicusDownloader, ChirpsDownloader
 from .tools import RasterClipper, GeoServerUploadPreparer, logging_manager, error, info, warning
 from .climate_processing import MonthlyProcessor, ClimatologyProcessor
 from aclimate_v3_orm.services import MngDataSourceService
-from aclimate_v3_orm import create_tables
 
 class ETLError(Exception):
     """Custom exception for ETL pipeline errors"""
