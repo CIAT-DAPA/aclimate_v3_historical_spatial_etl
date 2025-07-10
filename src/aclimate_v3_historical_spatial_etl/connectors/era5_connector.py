@@ -1,7 +1,4 @@
 import os
-import json
-from pathlib import Path
-from typing import Dict, Any, List, Optional
 import cdsapi
 from zipfile import ZipFile
 import calendar
@@ -9,50 +6,49 @@ from datetime import datetime
 import xarray as xr
 import rioxarray
 import shutil
+from pathlib import Path
+from typing import Dict, List, Optional
 from ..tools import error, warning, info
 
 class CopernicusDownloader:
-    def __init__(self, config_path: str,
+    def __init__(self, config: Dict,
                  start_date: str, end_date: str, 
                  download_data_path: str, keep_nc_files: bool = False):
         """
         Enhanced ERA5 data processor with support for multiple datasets and formats.
         
         Args:
-            config_path: Path to configuration file
+            config: Dictionary with Copernicus configuration
             start_date: Start date (YYYY-MM)
             end_date: End date (YYYY-MM)
             download_data_path: Temporary download directory
             keep_nc_files: Whether to preserve NC files (default: False)
         """
-        self.config = self._load_config(config_path)
+        self.config = config
         self.start_date = start_date
         self.end_date = end_date
         self.download_data_path = Path(download_data_path)
         self.keep_nc_files = keep_nc_files
-        
         self._initialize_paths()
-        self.cds_client = cdsapi.Client(timeout=600)
         info("CopernicusDownloader initialized", 
              component="downloader",
-             config_path=config_path,
              date_range=f"{start_date} to {end_date}")
 
-    def _load_config(self, config_path: str) -> Dict:
+    def _initialize_paths(self):
         try:
-            with open(config_path) as f:
-                config = json.load(f)
-            info("Configuration loaded successfully",
-                 component="config",
-                 config_path=config_path)
-            return config
+            for dataset in self.config['datasets'].values():
+                for var_config in dataset['variables'].values():
+                    path = self.download_data_path / var_config['output_dir']
+                    path.mkdir(parents=True, exist_ok=True)
+            info("Output directories initialized",
+                 component="setup",
+                 base_path=str(self.download_data_path))
         except Exception as e:
-            error("Failed to load configuration",
-                  component="config",
-                  config_path=config_path,
+            error("Failed to initialize output directories",
+                  component="setup",
                   error=str(e))
             raise
-
+    
     def _validate_paths(self):
         """Ensure base directory exists"""
         try:
@@ -96,21 +92,6 @@ class CopernicusDownloader:
                     component="cleanup",
                     path=str(year_path),
                     error=str(e))
-
-    def _initialize_paths(self):
-        try:
-            for dataset in self.config['datasets'].values():
-                for var_config in dataset['variables'].values():
-                    path = self.download_data_path / var_config['output_dir']
-                    path.mkdir(parents=True, exist_ok=True)
-            info("Output directories initialized",
-                 component="setup",
-                 base_path=str(self.download_data_path))
-        except Exception as e:
-            error("Failed to initialize output directories",
-                  component="setup",
-                  error=str(e))
-            raise
 
     def download_data(self, dataset_name: Optional[str] = None, 
                      variables: Optional[List[str]] = None,
@@ -161,6 +142,7 @@ class CopernicusDownloader:
         info("Data download completed",
              component="download",
              dataset=dataset_name)
+
 
     def _build_request(self, dataset_name: str, dataset_config: Dict, var_config: Dict,
                        year: int, month: str, days: List[str],
@@ -233,13 +215,14 @@ class CopernicusDownloader:
                                     year, month, days, custom_times)
 
         try:
+            cds_client = cdsapi.Client(timeout=800)
             if dataset_config.get('format', '') == 'zip' or dataset_config.get('download_format', '') == 'zip':
                 zip_file = output_dir / f"{variable}_{year}{month}.zip"
                 info("Starting zip file download",
                      component="download",
                      file=str(zip_file))
                 
-                self.cds_client.retrieve(dataset_name, request, str(zip_file))
+                cds_client.retrieve(dataset_name, request, str(zip_file))
                 
                 info("Extracting zip file",
                      component="download",
@@ -258,7 +241,7 @@ class CopernicusDownloader:
                      component="download",
                      file=str(output_path))
                 
-                self.cds_client.retrieve(dataset_name, request, str(output_path))
+                cds_client.retrieve(dataset_name, request, str(output_path))
                 
                 info("File download completed",
                      component="download",

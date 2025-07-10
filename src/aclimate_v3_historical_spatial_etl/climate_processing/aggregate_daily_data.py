@@ -1,10 +1,9 @@
-import json
-from pathlib import Path
 import xarray as xr
 import rioxarray
 import numpy as np
 from collections import defaultdict
-from typing import Optional, Union, List
+from pathlib import Path
+from typing import Optional, Union, List, Dict
 from ..tools import error, warning, info
 
 class MonthlyProcessor:
@@ -12,8 +11,8 @@ class MonthlyProcessor:
         self,
         input_path: Union[str, Path],
         output_path: Union[str, Path],
-        naming_config_path: Union[str, Path],
-        countries_config_path: Union[str, Path],
+        naming_config: Dict,
+        countries_config: Dict,
         country: Optional[str] = None
     ):
         """
@@ -22,31 +21,24 @@ class MonthlyProcessor:
         Args:
             input_path: Path to daily clipped rasters
             output_path: Path to save monthly averaged rasters
-            naming_config_path: JSON config path for naming conventions
-            countries_config_path: JSON config path for country information
+            naming_config: Dict with naming conventions configuration
+            countries_config: Dict with country information configuration
             country: Target country name
         """
         try:
             # Convert paths to Path objects
             self.input_path = Path(input_path) if isinstance(input_path, str) else input_path
             self.output_path = Path(output_path) if isinstance(output_path, str) else output_path
-            naming_config_path = Path(naming_config_path) if isinstance(naming_config_path, str) else naming_config_path
-            countries_config_path = Path(countries_config_path) if isinstance(countries_config_path, str) else countries_config_path
             
-            # Validate paths
+            # Validate input path
             if not self.input_path.exists():
                 raise ValueError(f"Input path does not exist: {self.input_path}")
-            if not naming_config_path.exists():
-                raise ValueError(f"Naming config file not found: {naming_config_path}")
-            if not countries_config_path.exists():
-                raise ValueError(f"Countries config file not found: {countries_config_path}")
 
             # Create output directory
             self.output_path.mkdir(parents=True, exist_ok=True)
             
-            # Load configurations
-            self._load_naming_config(naming_config_path)
-            self._load_countries_config(countries_config_path, country)
+            self._load_naming_config(naming_config)
+            self._load_countries_config(countries_config, country)
             
             info("MonthlyProcessor initialized successfully",
                  component="initialization",
@@ -60,38 +52,31 @@ class MonthlyProcessor:
                   error=str(e))
             raise
         
-    def _load_naming_config(self, config_path: Path):
-        """Load naming configuration from JSON file"""
+    def _load_naming_config(self, config: Dict):
+        """Load naming configuration from dictionary"""
         try:
-            with open(config_path) as f:
-                self.naming_config = json.load(f)
-            
+            self.naming_config = config
             self.template = self.naming_config['file_naming']['template']
             self.variable_mapping = self.naming_config['file_naming']['components']['variable_mapping']
             
             info("Naming configuration loaded",
                  component="config",
-                 config_path=str(config_path),
                  template=self.template)
                 
         except Exception as e:
             error("Failed to load naming configuration",
                   component="config",
-                  config_path=str(config_path),
                   error=str(e))
             raise
     
-    def _load_countries_config(self, config_path: Path, country: Optional[str]):
-        """Load country configuration and set country code"""
+    def _load_countries_config(self, config: Dict, country: Optional[str]):
+        """Load country configuration and set country code from dict"""
         try:
-            with open(config_path) as f:
-                countries_config = json.load(f)
-            
-            target_country = country or countries_config.get('default_country')
+            target_country = country or config.get('default_country')
             if not target_country:
                 raise ValueError("No country specified and no default country in config")
                 
-            country_config = countries_config['countries'].get(target_country.upper())
+            country_config = config['countries'].get(target_country.upper())
             if not country_config:
                 raise ValueError(f"Country '{target_country}' not found in configuration")
                 
@@ -105,10 +90,9 @@ class MonthlyProcessor:
         except Exception as e:
             error("Failed to load country configuration",
                   component="config",
-                  config_path=str(config_path),
                   error=str(e))
             raise
-    
+
     def _generate_output_name(self, variable: str, year_month: str) -> str:
         """Generate output filename according to config template"""
         try:
