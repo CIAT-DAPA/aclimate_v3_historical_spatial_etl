@@ -1,7 +1,4 @@
 import os
-import json
-from pathlib import Path
-from typing import Dict, Any, List, Optional
 import cdsapi
 from zipfile import ZipFile
 import calendar
@@ -9,93 +6,34 @@ from datetime import datetime
 import xarray as xr
 import rioxarray
 import shutil
+from pathlib import Path
+from typing import Dict, List, Optional
 from ..tools import error, warning, info
 
 class CopernicusDownloader:
-    def __init__(self, config_path: str,
+    def __init__(self, config: Dict,
                  start_date: str, end_date: str, 
                  download_data_path: str, keep_nc_files: bool = False):
         """
         Enhanced ERA5 data processor with support for multiple datasets and formats.
         
         Args:
-            config_path: Path to configuration file
+            config: Dictionary with Copernicus configuration
             start_date: Start date (YYYY-MM)
             end_date: End date (YYYY-MM)
             download_data_path: Temporary download directory
             keep_nc_files: Whether to preserve NC files (default: False)
         """
-        self.config = self._load_config(config_path)
+        self.config = config
         self.start_date = start_date
         self.end_date = end_date
         self.download_data_path = Path(download_data_path)
         self.keep_nc_files = keep_nc_files
-        
         self._initialize_paths()
         self.cds_client = cdsapi.Client(timeout=600)
         info("CopernicusDownloader initialized", 
              component="downloader",
-             config_path=config_path,
              date_range=f"{start_date} to {end_date}")
-
-    def _load_config(self, config_path: str) -> Dict:
-        try:
-            with open(config_path) as f:
-                config = json.load(f)
-            info("Configuration loaded successfully",
-                 component="config",
-                 config_path=config_path)
-            return config
-        except Exception as e:
-            error("Failed to load configuration",
-                  component="config",
-                  config_path=config_path,
-                  error=str(e))
-            raise
-
-    def _validate_paths(self):
-        """Ensure base directory exists"""
-        try:
-            self.download_data_path.mkdir(parents=True, exist_ok=True)
-            info("Directory structure validated",
-                 component="setup",
-                 path=str(self.download_data_path))
-        except Exception as e:
-            error("Failed to validate directory structure",
-                  component="setup",
-                  path=str(self.download_data_path),
-                  error=str(e))
-            raise
-
-    def _organize_nc_files(self, year_path: Path):
-        """Move NC files to nc/ subfolder if keep_nc_files is True"""
-        if not self.keep_nc_files:
-            return
-            
-        nc_folder = year_path / "nc"
-        try:
-            nc_folder.mkdir(exist_ok=True)
-            moved_files = 0
-            
-            for nc_file in year_path.glob("*.nc"):
-                try:
-                    shutil.move(str(nc_file), str(nc_folder / nc_file.name))
-                    moved_files += 1
-                except Exception as e:
-                    warning("Failed to move NC file",
-                            component="cleanup",
-                            file=str(nc_file),
-                            error=str(e))
-            
-            info("NC files organized",
-                 component="cleanup",
-                 path=str(nc_folder),
-                 files_moved=moved_files)
-        except Exception as e:
-            warning("Failed to organize NC files",
-                    component="cleanup",
-                    path=str(year_path),
-                    error=str(e))
 
     def _initialize_paths(self):
         try:
@@ -161,6 +99,7 @@ class CopernicusDownloader:
         info("Data download completed",
              component="download",
              dataset=dataset_name)
+
 
     def _build_request(self, dataset_name: str, dataset_config: Dict, var_config: Dict,
                        year: int, month: str, days: List[str],

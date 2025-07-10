@@ -22,6 +22,7 @@ Python package for processing spatial historical climate data with a complete ET
 - Automated processing of temperature, precipitation, and solar radiation data
 - Flexible configuration for multiple countries and variables
 - End-to-end pipeline from raw data to published layers
+- Database-backed configuration management
 
 ---
 
@@ -30,6 +31,7 @@ Python package for processing spatial historical climate data with a complete ET
 - Python > 3.10
 - **Copernicus Climate Data Store (CDS) API key** - [Register here](https://cds.climate.copernicus.eu/)
 - GeoServer
+- PostgreSQL database for configuration storage
 
 ## ⚙️ Installation
 
@@ -37,6 +39,7 @@ Python package for processing spatial historical climate data with a complete ET
 pip install git+https://github.com/CIAT-DAPA/aclimate_v3_historical_spatial_etl
 pip install git+https://github.com/CIAT-DAPA/aclimate_v3_cut_spatial_data.git
 pip install git+https://github.com/CIAT-DAPA/aclimate_v3_spatial_importer.git
+pip install git+https://github.com/CIAT-DAPA/aclimate_v3_orm
 ```
 
 To install a specific version:
@@ -97,15 +100,15 @@ data/
 
 ## 🔧 Configuration
 
-### Required Config Files
+### Database Configuration
 
-Place these in your `config` directory:
+All configurations are stored in the database. Ensure your database contains the required configuration entries for:
 
-1. `chirps_config.json` - CHIRPS download settings
-2. `copernicus_config.json` - Copernicus/ERA5 settings
-3. `clipping_config.json` - Country boundaries and ISO codes
-4. `geoserver_config.json` - GeoServer workspace and store names
-5. `naming_config.json` - Output file naming conventions
+1. `chirps_config` - CHIRPS download settings
+2. `copernicus_config` - Copernicus/ERA5 settings
+3. `clipping_config` - Country boundaries and ISO codes
+4. `geoserver_config` - GeoServer workspace and store names
+5. `naming_config` - Output file naming conventions
 
 ### Environment Variables
 
@@ -117,6 +120,9 @@ set GEOSERVER_URL=http://localhost:8086/geoserver/rest/
 set GEOSERVER_USER=admin
 set GEOSERVER_PASSWORD=password
 set OTLP_ENDPOINT=localhost:4317
+set ENABLE_SIGNOZ=false
+set LOG_FILE_PATH=path/application.log
+set DATABASE_URL=postgresql://postgres:admin@localhost:5432/acimate_v3
 ```
 
 - Linux/Ubuntu:
@@ -127,6 +133,9 @@ export GEOSERVER_URL=http://localhost:8086/geoserver/rest/
 export GEOSERVER_USER=admin
 export GEOSERVER_PASSWORD=password
 export OTLP_ENDPOINT=localhost:4317
+export ENABLE_SIGNOZ=false
+export LOG_FILE_PATH=path/application.log
+export DATABASE_URL=postgresql://postgres:admin@localhost:5432/acimate_v3
 ```
 
 > [!NOTE]  
@@ -136,6 +145,9 @@ export OTLP_ENDPOINT=localhost:4317
 > - `GEOSERVER_USER`: Geoserver user
 > - `GEOSERVER_PASSWORD`: Geoserver password
 > - `OTLP_ENDPOINT`: Signoz endpoint to send logs
+> - `ENABLE_SIGNOZ`: Flag to send logs to signoz
+> - `LOG_FILE_PATH`: Path to save logs
+> - `DATABASE_URL`: Connection string to database
 
 ## 🧪 Running Tests
 
