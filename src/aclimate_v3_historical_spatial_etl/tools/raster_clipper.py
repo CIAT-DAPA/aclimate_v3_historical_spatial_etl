@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from typing import Dict, Any
 from aclimate_v3_cut_spatial_data import get_clipper, GeoServerBasicAuth
@@ -8,32 +7,25 @@ from .logging_manager import info, warning, error
 class RasterClipper:
     def __init__(self, 
                  country: str,
-                 downloader_configs: Dict[str, Path],
-                 naming_config_path: Path,
-                 clipping_config_path: Path):
+                 downloader_configs: Dict[str, Dict],
+                 naming_config: Dict,
+                 clipping_config: Dict):
         """
         Clips raster files to country boundaries using GeoServer.
         
         Args:
             country: Target country (e.g., "COLOMBIA")
-            downloader_configs: Dictionary with {'downloader_name': Path(config_file)}
-            naming_config_path: Path to the naming config file
-            clipping_config_path: Path to the clipping config file
+            downloader_configs: Dictionary with {'downloader_name': config_dict}
+            naming_config: Dictionary with naming configuration
+            clipping_config: Dictionary with clipping configuration
         """
         try:
             self.country = country.upper()
             self.downloader_configs = downloader_configs
+            self.naming_config = naming_config  # Recibe dict directamente
+            self.clipping_config = clipping_config  # Recibe dict directamente
             
-            # Load configurations
-            info("Loading configuration files",
-                 component="initialization",
-                 naming_config=str(naming_config_path),
-                 clipping_config=str(clipping_config_path))
-            
-            self.naming_config = self._load_config(naming_config_path)
-            self.clipping_config = self._load_config(clipping_config_path)
-            
-            # Validate country
+            # Validación del país
             if self.country not in self.clipping_config['countries']:
                 error("Country not found in configuration",
                       component="validation",
@@ -53,29 +45,12 @@ class RasterClipper:
                   component="initialization",
                   error=str(e))
             raise
-    
-    def _load_config(self, config_path: Path) -> Dict:
-        """Load JSON configuration file"""
-        try:
-            with open(config_path) as f:
-                config = json.load(f)
-            info("Configuration loaded successfully",
-                 component="config",
-                 config_path=str(config_path))
-            return config
-        except Exception as e:
-            error("Failed to load configuration file",
-                  component="config",
-                  config_path=str(config_path),
-                  error=str(e))
-            raise
-    
-    def _get_variable_mapping(self, config_path: Path) -> Dict:
-        """Get variable mapping from a config file"""
-        try:
-            with open(config_path) as f:
-                config = json.load(f)
 
+    # Eliminado el método _load_config ya que no es necesario
+
+    def _get_variable_mapping(self, config: Dict) -> Dict:
+        """Get variable mapping from a config dictionary"""
+        try:
             mapping = {}
             for dataset_name, dataset in config['datasets'].items():
                 # General case: dataset contains multiple variables
@@ -93,17 +68,16 @@ class RasterClipper:
             
             info("Variable mapping extracted",
                  component="config",
-                 config_path=str(config_path),
                  variables=list(mapping.keys()))
             return mapping
             
         except Exception as e:
             error("Failed to extract variable mapping",
                   component="config",
-                  config_path=str(config_path),
                   error=str(e))
             raise
 
+    # Todos los demás métodos se mantienen EXACTAMENTE igual
     def _generate_output_name(self, var_name: str, date_str: str) -> str:
         """Generate output filename according to naming configuration"""
         try:
@@ -148,12 +122,12 @@ class RasterClipper:
                  base_download_path=str(base_download_path),
                  base_processed_path=str(base_processed_path))
             
-            for downloader_name, config_path in self.downloader_configs.items():
+            for downloader_name, config in self.downloader_configs.items():
                 info(f"Processing data from downloader",
                      component="processing",
                      downloader_name=downloader_name)
                 
-                var_mapping = self._get_variable_mapping(config_path)
+                var_mapping = self._get_variable_mapping(config)
 
                 for var_name, output_dir in var_mapping.items():
                     input_path = base_download_path / output_dir

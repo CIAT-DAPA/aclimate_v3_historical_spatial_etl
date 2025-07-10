@@ -1,8 +1,7 @@
-import json
-from pathlib import Path
 import xarray as xr
 import rioxarray
 import numpy as np
+from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Union
 from ..tools import error, warning, info
 from collections import defaultdict
@@ -22,8 +21,8 @@ class ClimatologyProcessor:
         geoserver_store: str,
         output_path: Union[str, Path],
         variable: str,
-        naming_config_path: Union[str, Path],
-        countries_config_path: Union[str, Path],
+        naming_config: Dict,
+        countries_config: Dict,
         country: Optional[str] = None,
         date_range: Optional[Tuple[str, str]] = None
     ):
@@ -36,10 +35,10 @@ class ClimatologyProcessor:
             geoserver_store: Store name in GeoServer (required)
             output_path: Path to save climatology results (required)
             variable: Variable name to process (required)
-            naming_config_path: Path to naming configuration JSON file
-            countries_config_path: Path to countries configuration JSON file
-            country: Target country name (optional, uses default from config if not provided)
-            date_range: Optional date range tuple (YYYY-MM, YYYY-MM) to limit the calculation
+            naming_config: Dict with naming configuration
+            countries_config: Dict with countries configuration
+            country: Target country name (optional)
+            date_range: Optional date range tuple (YYYY-MM, YYYY-MM)
         """
         try:
             # Validate and get GeoServer configuration from environment
@@ -69,20 +68,12 @@ class ClimatologyProcessor:
             self.geoserver_store = geoserver_store
             self.variable = variable
             
-            # Convert paths to Path objects
-            naming_config_path = Path(naming_config_path) if isinstance(naming_config_path, str) else naming_config_path
-            countries_config_path = Path(countries_config_path) if isinstance(countries_config_path, str) else countries_config_path
+            # Convert path to Path object
             self.output_path = Path(output_path) if isinstance(output_path, str) else output_path
             
-            # Validate paths
-            if not naming_config_path.exists():
-                raise ValueError(f"Naming config file not found: {naming_config_path}")
-            if not countries_config_path.exists():
-                raise ValueError(f"Countries config file not found: {countries_config_path}")
-            
-            # Load configurations
-            self._load_naming_config(naming_config_path)
-            self._load_countries_config(countries_config_path, country)
+            # Load configurations from dicts
+            self._load_naming_config(naming_config)
+            self._load_countries_config(countries_config, country)
             
             # Create output directory
             self.output_path.mkdir(parents=True, exist_ok=True)
@@ -107,38 +98,31 @@ class ClimatologyProcessor:
                   error=str(e))
             raise
 
-    def _load_naming_config(self, config_path: Path):
-        """Load naming configuration from JSON file"""
+    def _load_naming_config(self, config: Dict):
+        """Load naming configuration from dictionary"""
         try:
-            with open(config_path) as f:
-                self.naming_config = json.load(f)
-            
+            self.naming_config = config
             self.template = self.naming_config['file_naming']['template']
             self.variable_mapping = self.naming_config['file_naming']['components']['variable_mapping']
 
             info("Naming configuration loaded",
                  component="config",
-                 config_path=str(config_path),
                  template=self.template)
                 
         except Exception as e:
             error("Failed to load naming configuration",
                   component="config",
-                  config_path=str(config_path),
                   error=str(e))
             raise
 
-    def _load_countries_config(self, config_path: Path, country: Optional[str]):
-        """Load country configuration and set country code"""
+    def _load_countries_config(self, config: Dict, country: Optional[str]):
+        """Load country configuration and set country code from dict"""
         try:
-            with open(config_path) as f:
-                countries_config = json.load(f)
-            
-            target_country = country or countries_config.get('default_country')
+            target_country = country or config.get('default_country')
             if not target_country:
                 raise ValueError("No country specified and no default country in config")
                 
-            country_config = countries_config['countries'].get(target_country.upper())
+            country_config = config['countries'].get(target_country.upper())
             if not country_config:
                 raise ValueError(f"Country '{target_country}' not found in configuration")
                 
@@ -152,7 +136,6 @@ class ClimatologyProcessor:
         except Exception as e:
             error("Failed to load country configuration",
                   component="config",
-                  config_path=str(config_path),
                   error=str(e))
             raise
 

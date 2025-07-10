@@ -2,14 +2,15 @@
 import argparse
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Union, Any
 import shutil
 import sys
 import json
 from .connectors import CopernicusDownloader, ChirpsDownloader
 from .tools import RasterClipper, GeoServerUploadPreparer, logging_manager, error, info, warning
 from .climate_processing import MonthlyProcessor, ClimatologyProcessor
-
+from aclimate_v3_orm.services import MngDataSourceService
+from aclimate_v3_orm import create_tables
 
 class ETLError(Exception):
     """Custom exception for ETL pipeline errors"""
@@ -25,7 +26,6 @@ def parse_args():
     parser.add_argument("--start_date", required=True, help="Start date in YYYY-MM format")
     parser.add_argument("--end_date", required=True, help="End date in YYYY-MM format")
     parser.add_argument("--data_path", required=True, help="Base directory for all data")
-    
     # Pipeline control flags
     parser.add_argument("--skip_download", action="store_true", help="Skip data download step")
     parser.add_argument("--climatology", action="store_true", help="Calculate climatology")
@@ -57,14 +57,14 @@ def validate_dates(start_date: str, end_date: str):
               error=str(e))
         raise ETLError(f"Invalid date format. Use YYYY-MM. Error: {str(e)}")
 
-def setup_directory_structure(base_path: Path) -> Dict[str, Path]:
-    """Create and validate the required directory structure."""
-    info("Setting up directory structure", 
+def setup_directory_structure(base_path: Path) -> Dict[str, Union[Dict[str, Any], Path]]:
+    """Create directory structure and load configurations using DataSourceService."""
+    info("Setting up directory structure and loading configurations",
          component="setup",
          base_path=str(base_path))
-    
+
+    # 1. Setup directory paths (sin el directorio config)
     paths = {
-        'config': base_path / "config",
         'raw_data': base_path / "raw_data",
         'processed_data': base_path / "process_data",
         'calc_data': base_path / "calc_data",
@@ -72,118 +72,159 @@ def setup_directory_structure(base_path: Path) -> Dict[str, Path]:
         'monthly_data': base_path / "calc_data" / "monthly_data",
         'upload_geoserver': base_path / "upload_geoserver"
     }
-    
-    # Validate config directory exists with required files
-    required_config_files = [
-        "chirps_config.json",
-        "clipping_config.json",
-        "copernicus_config.json",
-        "naming_config.json",
-        "geoserver_config.json"
-    ]
-    
-    if not paths['config'].exists():
-        error("Config directory not found", 
-              component="setup",
-              path=str(paths['config']))
-        raise ETLError(f"Config directory not found: {paths['config']}")
-    
-    missing_files = []
-    for file in required_config_files:
-        if not (paths['config'] / file).exists():
-            missing_files.append(file)
-    
-    if missing_files:
-        error("Missing config files",
-              component="setup",
-              missing_files=missing_files)
-        raise ETLError(f"Missing config files: {', '.join(missing_files)}")
-    
-    # Create other directories if they don't exist
-    for key, path in paths.items():
-        if key != 'config':
-            try:
-                path.mkdir(parents=True, exist_ok=True)
-                info(f"Directory created/verified", 
-                     component="setup",
-                     path=str(path))
-            except Exception as e:
-                error("Failed to create directory",
-                      component="setup",
-                      path=str(path),
-                      error=str(e))
-                raise ETLError(f"Could not create directory {path}: {str(e)}")
-    
-    return paths
 
-def load_config_with_iso2(config_path: Path, country: str) -> tuple:
+    # 2. Configuraciones requeridas
+    required_configs = {
+        "chirps_config": None,
+        "clipping_config": None,
+        "copernicus_config": None,
+        "naming_config": None,
+        "geoserver_config": None
+    }
+
+    # 3. Obtener configuraciones usando el servicio
+    data_source_service = MngDataSourceService()
+    loaded_configs = {}
+    missing_configs = []
+
+    for config_name in required_configs.keys():
+        try:
+            # Buscar en la base de datos usando el servicio
+            db_config = data_source_service.get_by_name(name=f"{config_name}")
+            
+            if not db_config or not db_config.content:
+                missing_configs.append(config_name)
+                continue
+
+            # Parsear el contenido JSON
+            config_content = json.loads(db_config.content)
+            loaded_configs[config_name] = config_content
+            info(f"Config loaded successfully",
+                 component="setup",
+                 config_name=config_name)
+
+        except json.JSONDecodeError as e:
+            error("Invalid JSON in configuration",
+                  component="setup",
+                  config_name=config_name,
+                  error=str(e))
+            missing_configs.append(config_name)
+        except Exception as e:
+            error("Failed to load configuration",
+                  component="setup",
+                  config_name=config_name,
+                  error=str(e))
+            missing_configs.append(config_name)
+
+    if missing_configs:
+        error("Missing or invalid configurations",
+              component="setup",
+              missing_configs=missing_configs)
+        raise ETLError(f"Missing or invalid configs: {', '.join(missing_configs)}")
+
+    for path in paths.values():
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            info(f"Directory created/verified",
+                 component="setup",
+                 path=str(path))
+        except Exception as e:
+            error("Failed to create directory",
+                  component="setup",
+                  path=str(path),
+                  error=str(e))
+            raise ETLError(f"Could not create directory {path}: {str(e)}")
+
+    return {
+        'paths': paths,
+        'configs': loaded_configs
+    }
+
+
+def load_config_with_iso2(configs: Dict[str, Any], country: str) -> tuple:
     """Load both geoserver and clipping configs and extract ISO2 code."""
     try:
-        info("Loading configuration files", 
+        info("Processing configuration from database", 
              component="config",
              country=country)
         
-        # Load clipping config to get ISO2 code
-        with open(config_path / "clipping_config.json") as f:
-            clipping_config = json.load(f)
+        # Get clipping config from loaded configs
+        clipping_config = configs["clipping_config"]
+        if not clipping_config:
+            error("Clipping config not found in loaded configurations",
+                  component="config")
+            raise ETLError("Clipping configuration not found in database")
             
-            # Get ISO2 code for the country
-            country_data = clipping_config["countries"].get(country.upper())
-            if not country_data:
-                error("Country not found in config",
-                      component="config",
-                      country=country)
-                raise ETLError(f"Country '{country}' not found in clipping_config.json")
-            
-            iso2 = country_data.get("iso2_code")
-            if not iso2:
-                error("ISO2 code missing for country",
-                      component="config",
-                      country=country)
-                raise ETLError(f"No ISO2 code found for country '{country}'")
+        # Get ISO2 code for the country
+        country_data = clipping_config["countries"].get(country.upper())
+        if not country_data:
+            error("Country not found in config",
+                  component="config",
+                  country=country)
+            raise ETLError(f"Country '{country}' not found in clipping config")
         
-        # Load geoserver config
-        with open(config_path / "geoserver_config.json") as f:
-            geoserver_config = json.load(f)
+        iso2 = country_data.get("iso2_code")
+        if not iso2:
+            error("ISO2 code missing for country",
+                  component="config",
+                  country=country)
+            raise ETLError(f"No ISO2 code found for country '{country}'")
+        
+        # Get geoserver config
+        geoserver_config = configs.get("geoserver_config")
+        if not geoserver_config:
+            error("Geoserver config not found in loaded configurations",
+                  component="config")
+            raise ETLError("Geoserver configuration not found in database")
+        
+        # Process store names to replace [iso2] with actual code
+        for data_type in geoserver_config.values():
+            if "stores" in data_type:
+                for var_name, store_name in data_type["stores"].items():
+                    if "[iso2]" in store_name:
+                        data_type["stores"][var_name] = store_name.replace("[iso2]", iso2)
+        
+        info("Configuration processed successfully",
+             component="config",
+             iso2_code=iso2)
+        return geoserver_config, iso2
             
-            # Process store names to replace [iso2] with actual code
-            for data_type in geoserver_config.values():
-                if "stores" in data_type:
-                    for var_name, store_name in data_type["stores"].items():
-                        if "[iso2]" in store_name:
-                            data_type["stores"][var_name] = store_name.replace("[iso2]", iso2)
-            
-            info("Configuration loaded successfully",
-                 component="config",
-                 iso2_code=iso2)
-            return geoserver_config, iso2
-            
-    except json.JSONDecodeError as e:
-        error("Invalid JSON in config file",
+    except KeyError as e:
+        error("Missing required key in configuration",
               component="config",
               error=str(e))
-        raise ETLError(f"Invalid JSON in config file: {str(e)}")
+        raise ETLError(f"Missing key in configuration: {str(e)}")
     except Exception as e:
-        error("Failed to load config files",
+        error("Failed to process configs",
               component="config",
               error=str(e))
-        raise ETLError(f"Could not read config files: {str(e)}")
+        raise ETLError(f"Could not process configurations: {str(e)}")
 
-def get_variables_from_config(config_path: Path) -> List[str]:
-    """Extract variables from naming config file."""
+def get_variables_from_config(configs: Dict[str, Any]) -> List[str]:
+    """Extract variables from naming config."""
     try:
-        info("Extracting variables from config",
+        info("Extracting variables from naming config",
              component="config")
         
-        with open(config_path / "naming_config.json") as f:
-            config = json.load(f)
-            variable_mapping = config["file_naming"]["components"]["variable_mapping"]
-            variables = list(variable_mapping.keys())
-            
-            info("Variables extracted successfully",
-                 component="config",
-                 variables=variables)
-            return variables
+        naming_config = configs["naming_config"]
+        if not naming_config:
+            error("Naming config not found in loaded configurations",
+                  component="config")
+            raise ETLError("Naming configuration not found in database")
+        
+        variable_mapping = naming_config["file_naming"]["components"]["variable_mapping"]
+        variables = list(variable_mapping.keys())
+        
+        info("Variables extracted successfully",
+             component="config",
+             variables=variables)
+        return variables
+        
+    except KeyError as e:
+        error("Missing required key in naming config",
+              component="config",
+              error=str(e))
+        raise ETLError(f"Missing key in naming configuration: {str(e)}")
     except Exception as e:
         error("Failed to extract variables from config",
               component="config",
@@ -237,11 +278,13 @@ def run_etl_pipeline(args):
         
         # Setup directory structure
         base_path = Path(args.data_path)
-        paths = setup_directory_structure(base_path)
-        
+        setup_result = setup_directory_structure(base_path)
+        configs = setup_result['configs']
+        paths = setup_result['paths']
+
         # Load configurations with ISO2 code substitution
-        geoserver_config, iso2 = load_config_with_iso2(paths['config'], args.country)
-        variables = get_variables_from_config(paths['config'])
+        geoserver_config, iso2 = load_config_with_iso2(configs, args.country)
+        variables = get_variables_from_config(configs)
         info("Configuration loaded",
              component="main",
              variables=variables,
@@ -250,13 +293,11 @@ def run_etl_pipeline(args):
         # Initialize downloaders
         copernicus_downloader = None
         chirps_downloader = None
-        
         # Step 1: Data Download
         if not args.skip_download:
             info("Starting data download phase", component="download")
-            
             copernicus_downloader = CopernicusDownloader(
-                config_path=paths['config'] / "copernicus_config.json",
+                config=configs["copernicus_config"],
                 start_date=args.start_date,
                 end_date=args.end_date,
                 download_data_path=paths['raw_data']
@@ -264,7 +305,7 @@ def run_etl_pipeline(args):
             copernicus_downloader.main()
             
             chirps_downloader = ChirpsDownloader(
-                config_path=paths['config'] / "chirps_config.json",
+                config=configs["chirps_config"],
                 start_date=args.start_date,
                 end_date=args.end_date,
                 download_data_path=paths['raw_data']
@@ -278,11 +319,11 @@ def run_etl_pipeline(args):
         clipper = RasterClipper(
             country=args.country,
             downloader_configs={
-                'copernicus': paths['config'] / "copernicus_config.json",
-                'chirps': paths['config'] / "chirps_config.json"
+                'copernicus': configs["copernicus_config"],
+                'chirps': configs["chirps_config"]
             },
-            naming_config_path=paths['config'] / "naming_config.json",
-            clipping_config_path=paths['config'] / "clipping_config.json"
+            naming_config=configs["naming_config"],
+            clipping_config=configs["clipping_config"]
         )
         clipper.process_all(
             base_download_path=paths['raw_data'],
@@ -327,8 +368,8 @@ def run_etl_pipeline(args):
             monthly_processor = MonthlyProcessor(
                 input_path=paths['processed_data'],
                 output_path=paths['monthly_data'],
-                naming_config_path=paths['config'] / "naming_config.json",
-                countries_config_path=paths['config'] / "clipping_config.json",
+                naming_config=configs["naming_config"],
+                countries_config=configs["clipping_config"],
                 country=args.country
             )
             monthly_processor.process_monthly_averages()
@@ -380,8 +421,8 @@ def run_etl_pipeline(args):
 
                 climatology_processor = ClimatologyProcessor(
                     output_path=paths['climatology_data'],
-                    naming_config_path=paths['config'] / "naming_config.json",
-                    countries_config_path=paths['config'] / "clipping_config.json",
+                    naming_config=configs["naming_config"],
+                    countries_config=configs["clipping_config"],
                     country=args.country,
                     geoserver_workspace=monthly_config['workspace'],
                     geoserver_layer=f"{monthly_config['workspace']}:{store_name}",
