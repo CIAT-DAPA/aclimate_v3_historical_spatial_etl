@@ -362,48 +362,48 @@ def run_etl_pipeline(args):
         info("Raw data GeoServer upload completed", component="geoserver")
         
         # Step 4: Monthly Processing and Upload
-        if args.climatology:
-            info("Starting monthly processing", component="processing")
-            monthly_processor = MonthlyProcessor(
-                input_path=paths['processed_data'],
-                output_path=paths['monthly_data'],
-                naming_config=configs["naming_config"],
-                countries_config=configs["clipping_config"],
-                country=args.country
+        info("Starting monthly processing", component="processing")
+        monthly_processor = MonthlyProcessor(
+            input_path=paths['processed_data'],
+            output_path=paths['monthly_data'],
+            naming_config=configs["naming_config"],
+            countries_config=configs["clipping_config"],
+            country=args.country
+        )
+        monthly_processor.process_monthly_averages()
+        
+        info("Starting monthly data GeoServer upload", component="geoserver")
+        monthly_preparer = GeoServerUploadPreparer(
+            source_data_path=paths['monthly_data'],
+            upload_base_path=paths['upload_geoserver']
+        )
+        
+        monthly_config = geoserver_config['monthly_data']
+        for variable in variables:
+            info(f"Processing monthly variable for GeoServer upload",
+                    component="geoserver",
+                    variable=variable)
+            
+            upload_dir = monthly_preparer.prepare_for_upload(f"{variable}")
+            
+            store_name = monthly_config['stores'].get(variable)
+            if not store_name:
+                error("No store name configured for monthly variable",
+                        component="geoserver",
+                        variable=variable)
+                raise ETLError(f"No store name configured for variable {variable} in monthly_data")
+            
+            monthly_preparer.upload_to_geoserver(
+                workspace=monthly_config['workspace'],
+                store=store_name,
+                date_format="yyyyMM"
             )
-            monthly_processor.process_monthly_averages()
-            
-            info("Starting monthly data GeoServer upload", component="geoserver")
-            monthly_preparer = GeoServerUploadPreparer(
-                source_data_path=paths['monthly_data'],
-                upload_base_path=paths['upload_geoserver']
-            )
-            
-            monthly_config = geoserver_config['monthly_data']
-            for variable in variables:
-                info(f"Processing monthly variable for GeoServer upload",
-                     component="geoserver",
-                     variable=variable)
-                
-                upload_dir = monthly_preparer.prepare_for_upload(f"{variable}")
-                
-                store_name = monthly_config['stores'].get(variable)
-                if not store_name:
-                    error("No store name configured for monthly variable",
-                          component="geoserver",
-                          variable=variable)
-                    raise ETLError(f"No store name configured for variable {variable} in monthly_data")
-                
-                monthly_preparer.upload_to_geoserver(
-                    workspace=monthly_config['workspace'],
-                    store=store_name,
-                    date_format="yyyyMM"
-                )
-                clean_directory(paths['upload_geoserver'], True)
-            
-            info("Monthly processing and upload completed", component="processing")
+            clean_directory(paths['upload_geoserver'], True)
+        
+        info("Monthly processing and upload completed", component="processing")
             
             # Step 5: Climatology Calculation and Upload
+        if args.climatology:
             info("Starting climatology calculation", component="processing")
             monthly_config = geoserver_config['monthly_data']
             for variable in variables:
