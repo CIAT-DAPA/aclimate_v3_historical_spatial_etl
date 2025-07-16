@@ -186,7 +186,7 @@ class RasterClipper:
                               error=str(e))
                         errors += 1
             
-            info("Variable processing completed",
+            info(f"Variable processing completed {var_name}: {files_processed} files processed, {files_skipped} files skipped, {errors} errors",
                  component="processing",
                  variable=var_name,
                  files_processed=files_processed,
@@ -194,7 +194,7 @@ class RasterClipper:
                  errors=errors)
                 
         except Exception as e:
-            error("Failed to process variable",
+            error(f"Failed to process variable {var_name}",
                   component="processing",
                   variable=var_name,
                   error=str(e))
@@ -222,7 +222,7 @@ class RasterClipper:
                      output_file=str(output_file))
                 return False
 
-            info("Processing raster file",
+            info(f"Processing raster file {str(input_file)} to {str(output_file)}",
                  component="processing",
                  input_file=str(input_file),
                  output_file=str(output_file))

@@ -28,7 +28,7 @@ class ChirpsDownloader:
         
         self._initialize_paths()
         
-        info("CHIRPS Downloader initialized",
+        info(f"CHIRPS Downloader initialized {start_date} to {end_date}",
              component="downloader",
              date_range=f"{start_date} to {end_date}")
 

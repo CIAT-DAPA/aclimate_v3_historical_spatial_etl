@@ -330,7 +330,7 @@ def run_etl_pipeline(args):
         )
         info("Data clipping completed", component="clipping")
         
-        # Step 3: Upload Processed Data to GeoServer
+        #Step 3: Upload Processed Data to GeoServer
         info("Starting GeoServer upload for raw data", component="geoserver")
         preparer = GeoServerUploadPreparer(
             source_data_path=paths['processed_data'],
@@ -347,7 +347,7 @@ def run_etl_pipeline(args):
             
             store_name = raw_config['stores'].get(variable)
             if not store_name:
-                error("No store name configured for variable",
+                error(f"No store name configured for variable {variable}",
                       component="geoserver",
                       variable=variable)
                 raise ETLError(f"No store name configured for variable {variable} in raw_data")
@@ -463,9 +463,6 @@ def run_etl_pipeline(args):
         # Step 6: Cleanup
         if not args.no_cleanup:
             info("Starting cleanup phase", component="cleanup")
-            
-            if copernicus_downloader:
-                copernicus_downloader.clean_rasters()
             
             clean_directory(paths['raw_data'], True)
             clean_directory(paths['processed_data'], True)
