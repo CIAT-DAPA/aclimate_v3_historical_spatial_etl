@@ -239,16 +239,26 @@ def clean_directory(path: Path, force: bool = False):
         return
     
     if not force:
-        response = input(f"Are you sure you want to clean {path}? [y/N]: ")
-        if response.lower() != 'y':
-            info("Cleanup cancelled by user",
-                 component="cleanup",
-                 path=str(path))
+        # Check if running in interactive mode
+        if sys.stdin.isatty():
+            response = input(f"Are you sure you want to clean {path}? [y/N]: ")
+            if response.lower() != 'y':
+                info("Cleanup cancelled by user",
+                     component="cleanup",
+                     path=str(path))
+                return
+        else:
+            warning("Non-interactive mode detected - skipping cleanup confirmation",
+                   component="cleanup",
+                   path=str(path))
             return
     
     try:
         items_deleted = 0
-        for item in path.glob("*"):
+        # Convert to list to avoid iterator issues during deletion
+        items_to_delete = list(path.glob("*"))
+        
+        for item in items_to_delete:
             if item.is_file():
                 item.unlink()
                 items_deleted += 1
@@ -261,11 +271,11 @@ def clean_directory(path: Path, force: bool = False):
              path=str(path),
              items_deleted=items_deleted)
     except Exception as e:
-        error("Failed to clean directory",
+        error(f"Failed to clean directory {str(path)}",
               component="cleanup",
               path=str(path),
               error=str(e))
-        raise
+        raise ETLError(f"Failed to clean directory {str(path)}: {str(e)}")
 
 def run_etl_pipeline(args):
     """Execute the enhanced ETL pipeline with dynamic store naming."""
