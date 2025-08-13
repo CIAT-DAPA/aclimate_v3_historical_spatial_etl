@@ -30,7 +30,7 @@ class CopernicusDownloader:
         self.download_data_path = Path(download_data_path)
         self.keep_nc_files = keep_nc_files
         self._initialize_paths()
-        info("CopernicusDownloader initialized", 
+        info(f"CopernicusDownloader initialized {start_date} to {end_date}", 
              component="downloader",
              date_range=f"{start_date} to {end_date}")
 
@@ -105,7 +105,7 @@ class CopernicusDownloader:
         start_year, start_month = map(int, self.start_date.split('-'))
         end_year, end_month = map(int, self.end_date.split('-'))
 
-        info("Starting data download",
+        info(f"Starting data download {variables_to_process}",
              component="download",
              dataset=dataset_name,
              variables=variables_to_process,
@@ -120,7 +120,7 @@ class CopernicusDownloader:
                        variable=variable)
                 continue
 
-            info(f"Processing variable",
+            info(f"Processing variable {variable}",
                  component="download",
                  variable=variable,
                  dataset=dataset_name)
@@ -313,7 +313,7 @@ class CopernicusDownloader:
                             
                             try:
                                 # Conversion logic
-                                info("Converting NetCDF to raster",
+                                info(f"Converting NetCDF to raster {str(nc_file)} to {str(tif_file)}",
                                      component="conversion",
                                      source=str(nc_file),
                                      target=str(tif_file))
@@ -389,7 +389,7 @@ class CopernicusDownloader:
                             tif_file.unlink()
                             files_deleted += 1
                         except Exception as e:
-                            error("Failed to delete file",
+                            error(f"Failed to delete file {str(tif_file)}",
                                   component="cleanup",
                                   file=str(tif_file),
                                   error=str(e))

@@ -122,10 +122,6 @@ class GeoServerUploadPreparer:
                     dest = self.upload_dir / tif.name
                     shutil.copy2(tif, dest)
                     copied_count += 1
-                    info("Copied file",
-                         component="preparation",
-                         source=str(tif),
-                         destination=str(dest))
                 except Exception as e:
                     warning("Failed to copy file",
                             component="preparation",

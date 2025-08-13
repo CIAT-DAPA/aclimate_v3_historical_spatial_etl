@@ -239,16 +239,26 @@ def clean_directory(path: Path, force: bool = False):
         return
     
     if not force:
-        response = input(f"Are you sure you want to clean {path}? [y/N]: ")
-        if response.lower() != 'y':
-            info("Cleanup cancelled by user",
-                 component="cleanup",
-                 path=str(path))
+        # Check if running in interactive mode
+        if sys.stdin.isatty():
+            response = input(f"Are you sure you want to clean {path}? [y/N]: ")
+            if response.lower() != 'y':
+                info("Cleanup cancelled by user",
+                     component="cleanup",
+                     path=str(path))
+                return
+        else:
+            warning("Non-interactive mode detected - skipping cleanup confirmation",
+                   component="cleanup",
+                   path=str(path))
             return
     
     try:
         items_deleted = 0
-        for item in path.glob("*"):
+        # Convert to list to avoid iterator issues during deletion
+        items_to_delete = list(path.glob("*"))
+        
+        for item in items_to_delete:
             if item.is_file():
                 item.unlink()
                 items_deleted += 1
@@ -261,11 +271,11 @@ def clean_directory(path: Path, force: bool = False):
              path=str(path),
              items_deleted=items_deleted)
     except Exception as e:
-        error("Failed to clean directory",
+        error(f"Failed to clean directory {str(path)}",
               component="cleanup",
               path=str(path),
               error=str(e))
-        raise
+        raise ETLError(f"Failed to clean directory {str(path)}: {str(e)}")
 
 def run_etl_pipeline(args):
     """Execute the enhanced ETL pipeline with dynamic store naming."""
@@ -330,7 +340,7 @@ def run_etl_pipeline(args):
         )
         info("Data clipping completed", component="clipping")
         
-        # Step 3: Upload Processed Data to GeoServer
+        #Step 3: Upload Processed Data to GeoServer
         info("Starting GeoServer upload for raw data", component="geoserver")
         preparer = GeoServerUploadPreparer(
             source_data_path=paths['processed_data'],
@@ -347,7 +357,7 @@ def run_etl_pipeline(args):
             
             store_name = raw_config['stores'].get(variable)
             if not store_name:
-                error("No store name configured for variable",
+                error(f"No store name configured for variable {variable}",
                       component="geoserver",
                       variable=variable)
                 raise ETLError(f"No store name configured for variable {variable} in raw_data")
@@ -362,48 +372,48 @@ def run_etl_pipeline(args):
         info("Raw data GeoServer upload completed", component="geoserver")
         
         # Step 4: Monthly Processing and Upload
-        if args.climatology:
-            info("Starting monthly processing", component="processing")
-            monthly_processor = MonthlyProcessor(
-                input_path=paths['processed_data'],
-                output_path=paths['monthly_data'],
-                naming_config=configs["naming_config"],
-                countries_config=configs["clipping_config"],
-                country=args.country
+        info("Starting monthly processing", component="processing")
+        monthly_processor = MonthlyProcessor(
+            input_path=paths['processed_data'],
+            output_path=paths['monthly_data'],
+            naming_config=configs["naming_config"],
+            countries_config=configs["clipping_config"],
+            country=args.country
+        )
+        monthly_processor.process_monthly_averages()
+        
+        info("Starting monthly data GeoServer upload", component="geoserver")
+        monthly_preparer = GeoServerUploadPreparer(
+            source_data_path=paths['monthly_data'],
+            upload_base_path=paths['upload_geoserver']
+        )
+        
+        monthly_config = geoserver_config['monthly_data']
+        for variable in variables:
+            info(f"Processing monthly variable for GeoServer upload",
+                    component="geoserver",
+                    variable=variable)
+            
+            upload_dir = monthly_preparer.prepare_for_upload(f"{variable}")
+            
+            store_name = monthly_config['stores'].get(variable)
+            if not store_name:
+                error("No store name configured for monthly variable",
+                        component="geoserver",
+                        variable=variable)
+                raise ETLError(f"No store name configured for variable {variable} in monthly_data")
+            
+            monthly_preparer.upload_to_geoserver(
+                workspace=monthly_config['workspace'],
+                store=store_name,
+                date_format="yyyyMM"
             )
-            monthly_processor.process_monthly_averages()
-            
-            info("Starting monthly data GeoServer upload", component="geoserver")
-            monthly_preparer = GeoServerUploadPreparer(
-                source_data_path=paths['monthly_data'],
-                upload_base_path=paths['upload_geoserver']
-            )
-            
-            monthly_config = geoserver_config['monthly_data']
-            for variable in variables:
-                info(f"Processing monthly variable for GeoServer upload",
-                     component="geoserver",
-                     variable=variable)
-                
-                upload_dir = monthly_preparer.prepare_for_upload(f"{variable}")
-                
-                store_name = monthly_config['stores'].get(variable)
-                if not store_name:
-                    error("No store name configured for monthly variable",
-                          component="geoserver",
-                          variable=variable)
-                    raise ETLError(f"No store name configured for variable {variable} in monthly_data")
-                
-                monthly_preparer.upload_to_geoserver(
-                    workspace=monthly_config['workspace'],
-                    store=store_name,
-                    date_format="yyyyMM"
-                )
-                clean_directory(paths['upload_geoserver'], True)
-            
-            info("Monthly processing and upload completed", component="processing")
+            clean_directory(paths['upload_geoserver'], True)
+        
+        info("Monthly processing and upload completed", component="processing")
             
             # Step 5: Climatology Calculation and Upload
+        if args.climatology:
             info("Starting climatology calculation", component="processing")
             monthly_config = geoserver_config['monthly_data']
             for variable in variables:
@@ -463,9 +473,6 @@ def run_etl_pipeline(args):
         # Step 6: Cleanup
         if not args.no_cleanup:
             info("Starting cleanup phase", component="cleanup")
-            
-            if copernicus_downloader:
-                copernicus_downloader.clean_rasters()
             
             clean_directory(paths['raw_data'], True)
             clean_directory(paths['processed_data'], True)
