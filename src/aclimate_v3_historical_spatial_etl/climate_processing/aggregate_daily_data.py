@@ -286,7 +286,7 @@ class MonthlyProcessor:
                     tif_file.unlink()
                     deleted_count += 1
                 except Exception as e:
-                    warning("Failed to delete file",
+                    warning(f"Failed to delete file {str(tif_file)}",
                             component="cleanup",
                             file=str(tif_file),
                             error=str(e))

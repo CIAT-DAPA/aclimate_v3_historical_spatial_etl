@@ -121,9 +121,10 @@ jobs:
       uses: actions/checkout@v3
       with:
         ref: main
-    - name: Update version
+    - name: Update version in pyproject.toml
       run: |
-        sed -i "s/version='.*'/version='${{ steps.taggerDryRun.outputs.new_tag }}'/" setup.py
+        pip install toml
+        python -c "import toml; f = open('pyproject.toml', 'r'); data = toml.load(f); f.close(); data['project']['version'] = '${{ steps.taggerDryRun.outputs.new_tag }}'; f = open('pyproject.toml', 'w'); toml.dump(data, f); f.close()"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Commit changes
