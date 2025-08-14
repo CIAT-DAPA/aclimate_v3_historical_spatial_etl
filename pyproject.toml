@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aclimate_v3_historical_spatial_etl"
-version = "v0.0.4"
+version = "v0.0.5"
 description = "ETL pipeline designed to download, extract, and prepare historical spatial data for integration into GeoServer."
 readme = "README.md"
 requires-python = ">=3.10"
