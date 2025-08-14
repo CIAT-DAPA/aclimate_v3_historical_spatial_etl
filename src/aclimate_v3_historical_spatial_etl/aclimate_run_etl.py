@@ -10,6 +10,7 @@ from .connectors import CopernicusDownloader, ChirpsDownloader
 from .tools import RasterClipper, GeoServerUploadPreparer, logging_manager, error, info, warning
 from .climate_processing import MonthlyProcessor, ClimatologyProcessor
 from aclimate_v3_orm.services import MngDataSourceService
+from aclimate_v3_orm import create_tables
 
 class ETLError(Exception):
     """Custom exception for ETL pipeline errors"""
@@ -29,6 +30,7 @@ def parse_args():
     parser.add_argument("--skip_download", action="store_true", help="Skip data download step")
     parser.add_argument("--climatology", action="store_true", help="Calculate climatology")
     parser.add_argument("--no_cleanup", action="store_true", help="Disable automatic cleanup")
+    parser.add_argument("--init", action="store_true", help="Initialize database tables before running ETL")
     
     args = parser.parse_args()
     info("Command line arguments parsed successfully", 
@@ -281,6 +283,12 @@ def run_etl_pipeline(args):
     """Execute the enhanced ETL pipeline with dynamic store naming."""
     try:
         info("Starting ETL pipeline", component="main")
+
+        if getattr(args, "init", False):
+            info("Initializing database tables via create_tables()", component="main")
+            create_tables()
+            info("Database tables created successfully", component="main")
+            return
         
         # Validate inputs
         validate_dates(args.start_date, args.end_date)
