@@ -185,5 +185,5 @@ aclimate_v3_historical_spatial_etl/
 │       └── aclimate_run_etl.py   # Main ETL entry script
 ├── tests/                       # Unit and integration tests
 ├── requirements.txt             # Dependencies
-└── setup.py                     # Packaging
+└── pyproject.toml               # Packaging
 ```
