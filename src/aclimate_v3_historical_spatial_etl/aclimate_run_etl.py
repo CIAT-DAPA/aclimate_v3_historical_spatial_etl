@@ -288,7 +288,6 @@ def run_etl_pipeline(args):
             info("Initializing database tables via create_tables()", component="main")
             create_tables()
             info("Database tables created successfully", component="main")
-            return
         
         # Validate inputs
         validate_dates(args.start_date, args.end_date)
