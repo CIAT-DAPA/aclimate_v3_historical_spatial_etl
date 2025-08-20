@@ -29,10 +29,13 @@ class CopernicusDownloader:
         self.end_date = end_date
         self.download_data_path = Path(download_data_path)
         self.keep_nc_files = keep_nc_files
+
+        self.validate_cdsapirc()
+
         self._initialize_paths()
-        info(f"CopernicusDownloader initialized {start_date} to {end_date}", 
-             component="downloader",
-             date_range=f"{start_date} to {end_date}")
+        info(f"CopernicusDownloader initialized {self.start_date} to {self.end_date}", 
+            component="downloader",
+            date_range=f"{self.start_date} to {self.end_date}")
 
     def _initialize_paths(self):
         try:
@@ -62,6 +65,31 @@ class CopernicusDownloader:
                   path=str(self.download_data_path),
                   error=str(e))
             raise
+
+    def validate_cdsapirc():
+        """
+        Validates the existence and format of ~/.cdsapirc for Copernicus CDS API authentication.
+        Raises FileNotFoundError or ValueError if invalid.
+        """
+        cdsapirc_path = Path.home() / ".cdsapirc"
+        if not cdsapirc_path.exists():
+            error(f"The {cdsapirc_path} file was not found. It is required for authentication with the Copernicus CDS API.", component="setup", path=str(cdsapirc_path))
+            raise FileNotFoundError(f"The {cdsapirc_path} file was not found. Please create this file with your Copernicus credentials.")
+        # Validate format
+        with open(cdsapirc_path, "r") as f:
+            lines = [line.strip() for line in f if line.strip()]
+        url_line = next((l for l in lines if l.lower().startswith("url:")), None)
+        key_line = next((l for l in lines if l.lower().startswith("key:")), None)
+        if not url_line or not key_line:
+            error(f"The {cdsapirc_path} file is missing required 'url' or 'key' entries.", component="setup", path=str(cdsapirc_path))
+            raise ValueError(f"The {cdsapirc_path} file is invalid. It must contain both 'url:' and 'key:' entries.")
+        # Optionally, check url format
+        url = url_line.split("url:",1)[-1].strip()
+        key = key_line.split("key:",1)[-1].strip()
+        if not url.startswith("https://") or not key:
+            error(f"The {cdsapirc_path} file has an invalid url or key format.", component="setup", path=str(cdsapirc_path), url=url, key=key)
+            raise ValueError(f"The {cdsapirc_path} file has an invalid url or key format.")
+        info(f"{cdsapirc_path} file validated successfully.", component="setup", path=str(cdsapirc_path))
 
     def _organize_nc_files(self, year_path: Path):
         """Move NC files to nc/ subfolder if keep_nc_files is True"""
