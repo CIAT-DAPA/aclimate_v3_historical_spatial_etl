@@ -66,7 +66,7 @@ class CopernicusDownloader:
                   error=str(e))
             raise
 
-    def validate_cdsapirc():
+    def validate_cdsapirc(self):
         """
         Validates the existence and format of ~/.cdsapirc for Copernicus CDS API authentication.
         Raises FileNotFoundError or ValueError if invalid.
