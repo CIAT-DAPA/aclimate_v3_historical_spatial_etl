@@ -34,6 +34,13 @@ jobs:
           pip install pytest
           pip install -e .
 
+      - name: Create .cdsapirc file
+        run: |
+          echo "url: https://cds.climate.copernicus.eu/api" > /home/runner/.cdsapirc
+          echo "key: ${{ secrets.CDSAPIRC_KEY }}" >> /home/runner/.cdsapirc
+      - name: Display content
+        run: cat /home/runner/.cdsapirc
+
       - name: Run Tests
         run: |
           source env/bin/activate
