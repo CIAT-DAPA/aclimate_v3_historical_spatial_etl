@@ -100,25 +100,25 @@ def setup_directory_structure(base_path: Path) -> Dict[str, Union[Dict[str, Any]
             # Parsear el contenido JSON
             config_content = json.loads(db_config.content)
             loaded_configs[config_name] = config_content
-            info(f"Config loaded successfully",
+            info(f"Config loaded successfully {config_name}",
                  component="setup",
                  config_name=config_name)
 
         except json.JSONDecodeError as e:
-            error("Invalid JSON in configuration",
+            error(f"Invalid JSON in configuration {config_name}",
                   component="setup",
                   config_name=config_name,
                   error=str(e))
             missing_configs.append(config_name)
         except Exception as e:
-            error("Failed to load configuration",
+            error(f"Failed to load configuration {config_name}",
                   component="setup",
                   config_name=config_name,
                   error=str(e))
             missing_configs.append(config_name)
 
     if missing_configs:
-        error("Missing or invalid configurations",
+        error(f"Missing or invalid configurations: {', '.join(missing_configs)}",
               component="setup",
               missing_configs=missing_configs)
         raise ETLError(f"Missing or invalid configs: {', '.join(missing_configs)}")
@@ -491,12 +491,12 @@ def run_etl_pipeline(args):
         info("ETL pipeline completed successfully", component="main")
     
     except ETLError as e:
-        error("ETL pipeline failed",
+        error(f"ETL pipeline failed {str(e)}",
               component="main",
               error=str(e))
         sys.exit(1)
     except Exception as e:
-        error("Unexpected error in ETL pipeline",
+        error(f"Unexpected error in ETL pipeline {str(e)}",
               component="main",
               error=str(e))
         sys.exit(1)
