@@ -119,9 +119,10 @@ $RECYCLE.BIN/
 *.log
 
 # Ignore credentials/config
-*.env
+.env
 .env.*
 secrets.env
+!.env.example
 
 # Ignore coverage and profiling
 .prof
