@@ -56,21 +56,22 @@ class ChirpsDownloader:
         if uncompressed_path.exists():
             info("File exists, skipping", component="download", file=str(uncompressed_path))
             return
-
         try:
             with DownloadProgressBar(unit='B', unit_scale=True, miniters=1, 
-                                   desc=url.split('/')[-1]) as t:
+                                desc=url.split('/')[-1]) as t:
                 urllib.request.urlretrieve(url, filename=path, reporthook=t.update_to)
+            
+            chirps_config = next(iter(self.config['datasets'].values()))
+            if chirps_config.get('compression', False):
+                with gzip.open(path, 'rb') as f_in:
+                    with open(uncompressed_path, 'wb') as f_out:
+                        f_out.write(f_in.read())
 
-            with gzip.open(path, 'rb') as f_in:
-                with open(uncompressed_path, 'wb') as f_out:
-                    f_out.write(f_in.read())
-
-            if remove_compressed:
-                path.unlink()
+                if remove_compressed:
+                    path.unlink()
 
         except Exception as e:
-            error("Download failed", component="download", url=url, error=str(e))
+            error(f"Download failed {url} error: {str(e)}", component="download", url=url)
             if uncompressed_path.exists():
                 try:
                     uncompressed_path.unlink()
