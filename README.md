@@ -59,6 +59,7 @@ python -m aclimate_v3_historical_spatial_etl.aclimate_run_etl \
   --end_date 2020-12 \
   --data_path /path/to/data \
   --climatology
+python -m aclimate_v3_historical_spatial_etl.aclimate_run_etl --country HONDURAS --start_date 2020-01 --end_date 2020-12 --data_path /path/to/data --climatology
 
 ```
 
