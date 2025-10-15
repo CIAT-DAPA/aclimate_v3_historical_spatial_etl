@@ -29,7 +29,7 @@ class CopernicusDownloader:
         self.end_date = end_date
         self.download_data_path = Path(download_data_path)
         self.keep_nc_files = keep_nc_files
-
+        print(config)
         self.validate_cdsapirc()
 
         self._initialize_paths()
@@ -126,7 +126,18 @@ class CopernicusDownloader:
                      days: Optional[List[str]] = None,
                      times: Optional[List[str]] = None):
         """Download data with flexible parameters"""
-        dataset_name = dataset_name or self.config['default_dataset']
+        # If no dataset_name provided, use the first (and typically only) dataset in config
+        if dataset_name is None:
+            available_datasets = list(self.config['datasets'].keys())
+            if not available_datasets:
+                error("No datasets found in configuration",
+                      component="download")
+                raise ValueError("No datasets available in configuration")
+            dataset_name = available_datasets[0]
+            info(f"Using dataset from config: {dataset_name}",
+                 component="download",
+                 dataset=dataset_name)
+        
         dataset_config = self.config['datasets'][dataset_name]
         
         variables_to_process = variables or list(dataset_config['variables'].keys())
