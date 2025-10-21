@@ -222,7 +222,7 @@ class MonthlyProcessor:
             
             combined = xr.concat(datasets, dim='time')
             
-            if variable.lower() in ['prec', 'precipitation']:
+            if variable.lower() in ['prec', 'precipitation', 'et0', 'evapotranspiration']:
                 monthly_data = combined.sum(dim='time', skipna=True)
                 operation = "sum"
             else:
