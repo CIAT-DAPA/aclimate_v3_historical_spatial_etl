@@ -58,7 +58,7 @@ def validate_dates(start_date: str, end_date: str):
               error=str(e))
         raise ETLError(f"Invalid date format. Use YYYY-MM. Error: {str(e)}")
 
-def setup_directory_structure(base_path: Path) -> Dict[str, Union[Dict[str, Any], Path]]:
+def setup_directory_structure(base_path: Path, country_name: str) -> Dict[str, Union[Dict[str, Any], Path]]:
     """Create directory structure and load configurations using DataSourceService."""
     info("Setting up directory structure and loading configurations",
          component="setup",
@@ -91,7 +91,7 @@ def setup_directory_structure(base_path: Path) -> Dict[str, Union[Dict[str, Any]
     for config_name in required_configs.keys():
         try:
             # Buscar en la base de datos usando el servicio
-            db_config = data_source_service.get_by_name(name=f"{config_name}")
+            db_config = data_source_service.get_by_name_and_country(name=f"{config_name}", country_name=country_name)
             
             if not db_config or not db_config.content:
                 missing_configs.append(config_name)
@@ -294,7 +294,7 @@ def run_etl_pipeline(args):
         
         # Setup directory structure
         base_path = Path(args.data_path)
-        setup_result = setup_directory_structure(base_path)
+        setup_result = setup_directory_structure(base_path, args.country)
         configs = setup_result['configs']
         paths = setup_result['paths']
 
@@ -309,6 +309,7 @@ def run_etl_pipeline(args):
         # Initialize downloaders
         copernicus_downloader = None
         chirps_downloader = None
+        return
         # Step 1: Data Download
         if not args.skip_download:
             info("Starting data download phase", component="download")
