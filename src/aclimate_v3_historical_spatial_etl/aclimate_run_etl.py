@@ -309,7 +309,7 @@ def run_etl_pipeline(args):
         # Initialize downloaders
         copernicus_downloader = None
         chirps_downloader = None
-        return
+        
         # Step 1: Data Download
         if not args.skip_download:
             info("Starting data download phase", component="download")
