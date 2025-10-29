@@ -6,9 +6,10 @@ from datetime import datetime
 import xarray as xr
 import rioxarray
 import shutil
+from rasterio.enums import Resampling
 from pathlib import Path
 from typing import Dict, List, Optional
-from ..tools import error, warning, info
+from ..tools import error, warning, info, RasterResampler
 
 class CopernicusDownloader:
     def __init__(self, config: Dict,
@@ -31,6 +32,18 @@ class CopernicusDownloader:
         self.keep_nc_files = keep_nc_files
 
         self.validate_cdsapirc()
+
+        # Initialize resampler for ERA5 data resolution adjustment
+        try:
+            self.resampler = RasterResampler()
+            info("RasterResampler initialized for ERA5 data processing",
+                 component="downloader",
+                 target_resolution=self.resampler.target_resolution)
+        except Exception as e:
+            warning("RasterResampler initialization failed - proceeding without resampling",
+                    component="downloader",
+                    error=str(e))
+            self.resampler = None
 
         self._initialize_paths()
         info(f"CopernicusDownloader initialized {self.start_date} to {self.end_date}", 
@@ -399,6 +412,84 @@ class CopernicusDownloader:
         info("NetCDF to raster conversion completed",
              component="conversion")
 
+    def resample_rasters(self):
+        """
+        Resample all generated TIFF files to match CHIRPS resolution.
+        Files are resampled in place to maintain the same naming and location.
+        """
+        if not self.resampler:
+            warning("RasterResampler not available - skipping resampling step",
+                    component="resampling")
+            return
+
+        start_year, start_month = map(int, self.start_date.split('-'))
+        end_year, end_month = map(int, self.end_date.split('-'))
+
+        info("Starting raster resampling for ERA5 data",
+             component="resampling",
+             target_resolution=self.resampler.target_resolution)
+
+        total_processed = 0
+        total_successful = 0
+        total_failed = 0
+
+        for dataset_name, dataset_config in self.config['datasets'].items():
+            for variable, var_config in dataset_config['variables'].items():
+                info("Processing variable for resampling",
+                     component="resampling",
+                     dataset=dataset_name,
+                     variable=variable)
+                
+                var_path = self.download_data_path / var_config['output_dir']
+                
+                for year in range(start_year, end_year + 1):
+                    year_path = var_path / str(year)
+                    if not year_path.exists():
+                        continue
+                    
+                    # Find all TIFF files in the year directory
+                    tiff_files = list(year_path.glob("*.tif"))
+                    
+                    if not tiff_files:
+                        info(f"No TIFF files found for resampling in {year}",
+                             component="resampling",
+                             year=year,
+                             variable=variable)
+                        continue
+                    
+                    info(f"Found {len(tiff_files)} TIFF files to resample",
+                         component="resampling",
+                         year=year,
+                         variable=variable,
+                         file_count=len(tiff_files))
+                    
+                    for tiff_file in tiff_files:
+                        total_processed += 1
+                        
+                        # Resample in place (same file, same location)
+                        success = self.resampler.resample_raster_inplace(
+                            raster_path=tiff_file,
+                            backup=False,  # No backup needed for pipeline processing
+                            resampling_method=Resampling.bilinear
+                        )
+                        
+                        if success:
+                            total_successful += 1
+                        else:
+                            total_failed += 1
+                            error("Failed to resample raster file",
+                                  component="resampling",
+                                  file=str(tiff_file),
+                                  variable=variable,
+                                  year=year)
+
+        info("Raster resampling completed",
+             component="resampling",
+             total_processed=total_processed,
+             successful=total_successful,
+             failed=total_failed,
+             success_rate=f"{(total_successful/total_processed)*100:.1f}%" if total_processed > 0 else "0%")
+
     def clean_rasters(self):
         """Optional cleanup of all generated TIFF files"""
         info("Starting raster cleanup", component="cleanup")
@@ -465,6 +556,10 @@ class CopernicusDownloader:
             info("Starting Copernicus downloader main pipeline", component="main")
             self.download_data()
             self.netcdf_to_raster()
+            
+            # Resample ERA5 data to match CHIRPS resolution
+            self.resample_rasters()
+            
             info("Copernicus downloader pipeline completed successfully", component="main")
         except Exception as e:
             error("Copernicus downloader pipeline failed",
