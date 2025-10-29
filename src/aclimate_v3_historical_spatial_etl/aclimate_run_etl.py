@@ -320,7 +320,7 @@ def run_etl_pipeline(args):
                 download_data_path=paths['raw_data']
             )
             copernicus_downloader.main()
-            
+            return
             chirps_downloader = ChirpsDownloader(
                 config=configs["chirps_config"],
                 start_date=args.start_date,
@@ -330,7 +330,7 @@ def run_etl_pipeline(args):
             chirps_downloader.main()
             
             info("Data download completed", component="download")
-        
+        return
         # Step 2: Clipping Data
         info("Starting data clipping phase", component="clipping")
         clipper = RasterClipper(
