@@ -25,5 +25,12 @@
             "Precipitation": "climate_historical_climatology_[iso2]_prec",
             "Solar_Radiation": "climate_historical_climatology_[iso2]_rad"
         }
+    },
+    "indicators_data": {
+        "workspace": "climate_index",
+        "stores": {
+            "TXx": "climate_index_[iso2]_TXx",
+            "TR20": "climate_index_[iso2]_TR20"
+        }
     }
 }
