@@ -1,2 +1,3 @@
 from .aggregate_daily_data import MonthlyProcessor
 from .aggregate_monthly_data import ClimatologyProcessor
+from .indicators_processor import IndicatorsProcessor

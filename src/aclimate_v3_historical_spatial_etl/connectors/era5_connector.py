@@ -9,6 +9,7 @@ import shutil
 from rasterio.enums import Resampling
 from pathlib import Path
 from typing import Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..tools import error, warning, info, RasterResampler
 
 class CopernicusDownloader:
@@ -30,6 +31,9 @@ class CopernicusDownloader:
         self.end_date = end_date
         self.download_data_path = Path(download_data_path)
         self.keep_nc_files = keep_nc_files
+        
+        # Configure parallel processing
+        self.max_workers = int(os.getenv('MAX_PARALLEL_DOWNLOADS', 4))
 
         self.validate_cdsapirc()
 
@@ -134,11 +138,85 @@ class CopernicusDownloader:
                     path=str(year_path),
                     error=str(e))
 
+    def _cleanup_netcdf_files_deferred(self, files_to_delete: List[Path]):
+        """
+        Safely delete NetCDF files with retry logic and proper error handling.
+        This method is called after all conversions are complete to avoid conflicts.
+        """
+        import time
+        import gc
+        
+        if not files_to_delete:
+            return
+            
+        info(f"Starting deferred cleanup of {len(files_to_delete)} NetCDF files",
+             component="cleanup",
+             file_count=len(files_to_delete))
+        
+        # Force garbage collection to ensure all file handles are closed
+        gc.collect()
+        
+        # Add a small delay to ensure all file handles are properly released
+        time.sleep(1)
+        
+        deleted_count = 0
+        failed_count = 0
+        
+        for nc_file in files_to_delete:
+            if not nc_file.exists():
+                continue
+                
+            max_retries = 5
+            retry_delay = 0.5  # Start with shorter delay
+            
+            for attempt in range(max_retries):
+                try:
+                    nc_file.unlink()
+                    deleted_count += 1
+                    info("NetCDF file deleted successfully",
+                         component="cleanup",
+                         file=str(nc_file))
+                    break
+                    
+                except (PermissionError, OSError) as e:
+                    if attempt < max_retries - 1:
+                        warning(f"Failed to delete NetCDF file, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})",
+                                component="cleanup",
+                                file=str(nc_file),
+                                error=str(e))
+                        time.sleep(retry_delay)
+                        retry_delay *= 1.5  # Gradual backoff
+                        
+                        # Force garbage collection between retries
+                        gc.collect()
+                    else:
+                        failed_count += 1
+                        error("Failed to delete NetCDF file after all retries",
+                              component="cleanup",
+                              file=str(nc_file),
+                              attempts=max_retries,
+                              error=str(e))
+                        
+                except Exception as e:
+                    failed_count += 1
+                    error("Unexpected error deleting NetCDF file",
+                          component="cleanup",
+                          file=str(nc_file),
+                          error=str(e))
+                    break
+        
+        info("Deferred NetCDF cleanup completed",
+             component="cleanup",
+             total_files=len(files_to_delete),
+             deleted=deleted_count,
+             failed=failed_count,
+             success_rate=f"{(deleted_count/(deleted_count+failed_count))*100:.1f}%" if (deleted_count+failed_count) > 0 else "0%")
+
     def download_data(self, dataset_name: Optional[str] = None, 
                      variables: Optional[List[str]] = None,
                      days: Optional[List[str]] = None,
                      times: Optional[List[str]] = None):
-        """Download data with flexible parameters"""
+        """Download data with flexible parameters and parallel processing"""
         dataset_name = dataset_name or self.config['default_dataset']
         dataset_config = self.config['datasets'][dataset_name]
         
@@ -150,8 +228,11 @@ class CopernicusDownloader:
              component="download",
              dataset=dataset_name,
              variables=variables_to_process,
-             date_range=f"{self.start_date} to {self.end_date}")
+             date_range=f"{self.start_date} to {self.end_date}",
+             max_workers=self.max_workers)
 
+        # Prepare download tasks
+        download_tasks = []
         for variable in variables_to_process:
             var_config = dataset_config['variables'].get(variable)
             if not var_config:
@@ -161,28 +242,55 @@ class CopernicusDownloader:
                        variable=variable)
                 continue
 
-            info(f"Processing variable {variable}",
-                 component="download",
-                 variable=variable,
-                 dataset=dataset_name)
-            
             for year in range(start_year, end_year + 1):
                 months = self._generate_month_range(year, start_year, start_month, end_year, end_month)
                 for month in months:
-                    self._download_month(
-                        dataset_name=dataset_name,
-                        dataset_config=dataset_config,
-                        variable=variable,
-                        var_config=var_config,
-                        year=year,
-                        month=month,
-                        custom_days=days,
-                        custom_times=times
-                    )
+                    download_tasks.append({
+                        'dataset_name': dataset_name,
+                        'dataset_config': dataset_config,
+                        'variable': variable,
+                        'var_config': var_config,
+                        'year': year,
+                        'month': month,
+                        'custom_days': days,
+                        'custom_times': times
+                    })
+
+        # Execute downloads in parallel
+        successful_downloads = 0
+        failed_downloads = 0
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_task = {
+                executor.submit(self._download_month, **task): task
+                for task in download_tasks
+            }
+            
+            for future in as_completed(future_to_task):
+                task = future_to_task[future]
+                try:
+                    future.result()
+                    successful_downloads += 1
+                    info(f"Download completed successfully",
+                         component="download",
+                         variable=task['variable'],
+                         year=task['year'],
+                         month=task['month'])
+                except Exception as e:
+                    failed_downloads += 1
+                    error(f"Download failed",
+                          component="download",
+                          variable=task['variable'],
+                          year=task['year'],
+                          month=task['month'],
+                          error=str(e))
         
         info("Data download completed",
              component="download",
-             dataset=dataset_name)
+             dataset=dataset_name,
+             successful=successful_downloads,
+             failed=failed_downloads,
+             total_tasks=len(download_tasks))
 
 
     def _build_request(self, dataset_name: str, dataset_config: Dict, var_config: Dict,
@@ -298,9 +406,114 @@ class CopernicusDownloader:
                   month=month,
                   error=str(e))
 
+    def _convert_netcdf_file(self, conversion_task: Dict) -> bool:
+        """Convert a single NetCDF file to TIFF format with thread-safe handling"""
+        import time
+        
+        nc_file = conversion_task['nc_file']
+        tif_file = conversion_task['tif_file']
+        var_config = conversion_task['var_config']
+        new_crs = conversion_task['new_crs']
+        
+        # Check if output file already exists
+        if tif_file.exists():
+            info("TIFF file already exists, skipping conversion",
+                 component="conversion",
+                 file=str(tif_file))
+            return True
+        
+        # Check if input file exists and is accessible
+        if not nc_file.exists():
+            warning("NetCDF file does not exist",
+                    component="conversion",
+                    file=str(nc_file))
+            return False
+        
+        info(f"Converting NetCDF to raster {str(nc_file)} to {str(tif_file)}",
+             component="conversion",
+             source=str(nc_file),
+             target=str(tif_file))
+        
+        max_retries = 3
+        retry_delay = 1  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                # Use context manager to ensure dataset is properly closed
+                with xr.open_dataset(nc_file) as xds:
+                    # Apply transformations if specified
+                    if 'transform' in var_config and 'value' in var_config:
+                        if var_config['transform'] == "-":
+                            xds = xds - var_config['value']
+                        elif var_config['transform'] == "/":
+                            xds = xds / var_config['value']
+                    
+                    # Set coordinate reference system
+                    xds.rio.write_crs(new_crs, inplace=True)
+                    
+                    # Find data variable
+                    data_var = next((v for v in xds.variables 
+                                   if v not in ['time','lat','lon','longitude','latitude','crs']), None)
+                    
+                    if data_var:
+                        # Create temporary output file to avoid conflicts
+                        temp_tif_file = tif_file.with_suffix('.tmp.tif')
+                        
+                        # Write to temporary file first
+                        xds[data_var].rio.to_raster(temp_tif_file)
+                        
+                        # Atomically rename to final file
+                        temp_tif_file.rename(tif_file)
+                        
+                        info("Raster conversion successful",
+                             component="conversion",
+                             file=str(tif_file))
+                        
+                        # Mark NetCDF file for deletion instead of deleting immediately
+                        # to avoid conflicts with parallel processing
+                        conversion_task['delete_nc'] = not self.keep_nc_files
+                        
+                        return True
+                    else:
+                        warning("No data variable found in NetCDF",
+                                component="conversion",
+                                file=str(nc_file))
+                        return False
+                        
+            except (PermissionError, OSError) as e:
+                if "being used by another process" in str(e) and attempt < max_retries - 1:
+                    warning(f"File access conflict, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})",
+                            component="conversion",
+                            source=str(nc_file),
+                            error=str(e))
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                else:
+                    error("File access error after retries",
+                          component="conversion",
+                          source=str(nc_file),
+                          attempts=attempt + 1,
+                          error=str(e))
+                    return False
+                    
+            except Exception as e:
+                error("Conversion failed with unexpected error",
+                      component="conversion",
+                      source=str(nc_file),
+                      attempt=attempt + 1,
+                      error=str(e))
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                return False
+        
+        return False
+
     def netcdf_to_raster(self):
         """
-        Convert NC to TIFF and organize files by year.
+        Convert NC to TIFF and organize files by year with parallel processing.
         Auto-deletes NC unless keep_nc_files=True.
         """
         new_crs = '+proj=longlat +datum=WGS84 +no_defs'
@@ -309,8 +522,13 @@ class CopernicusDownloader:
 
         info("Starting NetCDF to raster conversion",
              component="conversion",
-             keep_nc_files=self.keep_nc_files)
+             keep_nc_files=self.keep_nc_files,
+             max_workers=self.max_workers)
 
+        # Prepare conversion tasks
+        conversion_tasks = []
+        processed_files = set()  # Track already processed files to avoid duplicates
+        
         for dataset_name, dataset_config in self.config['datasets'].items():
             for variable, var_config in dataset_config['variables'].items():
                 info("Processing variable for conversion",
@@ -319,102 +537,118 @@ class CopernicusDownloader:
                      variable=variable)
                 
                 var_path = self.download_data_path / var_config['output_dir']
-                files_converted = 0
-                files_failed = 0
                 
                 for year in range(start_year, end_year + 1):
                     year_path = var_path / str(year)
                     if not year_path.exists():
                         continue
                     
-                    months = self._generate_month_range(year, start_year, start_month, end_year, end_month)
+                    # Find all unique NC files in the year directory instead of searching by day
+                    nc_patterns = [
+                        f"{variable}_*.nc",
+                        f"*{year}*.nc"
+                    ]
                     
-                    for month in months:
-                        days = self._generate_days(year, int(month))
+                    nc_files = set()
+                    for pattern in nc_patterns:
+                        matches = year_path.glob(pattern)
+                        nc_files.update(matches)
+                    
+                    # Process each unique NetCDF file only once
+                    for nc_file in nc_files:
+                        if not nc_file.exists():
+                            continue
+                            
+                        # Create unique identifier to avoid duplicates
+                        file_key = str(nc_file.resolve())
+                        if file_key in processed_files:
+                            continue
+                        processed_files.add(file_key)
                         
-                        for day in days:
-                            # Find NC file (supports multiple naming patterns)
-                            nc_patterns = [
-                                f"{variable}_{year}{month}.nc",
-                                f"{var_config.get('file_name','')}*{year}{month}{day}*.nc"
-                            ]
-                            
-                            nc_file = None
-                            for pattern in nc_patterns:
-                                matches = list(year_path.glob(pattern))
-                                if matches:
-                                    nc_file = matches[0]
-                                    break
-                            
-                            if not nc_file or not nc_file.exists():
-                                continue
-                                
-                            # Generate TIFF path
-                            tif_file = year_path / f"{var_config['output_dir']}_{year}{month}{day}.tif"
-                            
-                            try:
-                                # Conversion logic
-                                info(f"Converting NetCDF to raster {str(nc_file)} to {str(tif_file)}",
-                                     component="conversion",
-                                     source=str(nc_file),
-                                     target=str(tif_file))
-                                
-                                xds = xr.open_dataset(nc_file)
-                                
-                                if 'transform' in var_config and 'value' in var_config:
-                                    if var_config['transform'] == "-":
-                                        xds = xds - var_config['value']
-                                    elif var_config['transform'] == "/":
-                                        xds = xds / var_config['value']
-                                
-                                xds.rio.write_crs(new_crs, inplace=True)
-                                
-                                # Find data variable
-                                data_var = next((v for v in xds.variables 
-                                               if v not in ['time','lat','lon','longitude','latitude','crs']), None)
-                                
-                                if data_var:
-                                    xds[data_var].rio.to_raster(tif_file)
-                                    files_converted += 1
-                                    info("Raster conversion successful",
-                                         component="conversion",
-                                         file=str(tif_file))
-                                    
-                                    # Handle NC file
-                                    if not self.keep_nc_files:
-                                        nc_file.unlink()
-                                        info("Source NetCDF file deleted",
-                                             component="cleanup",
-                                             file=str(nc_file))
-                                else:
-                                    warning("No data variable found in NetCDF",
-                                            component="conversion",
-                                            file=str(nc_file))
-                                    files_failed += 1
-                            
-                            except Exception as e:
-                                error("Conversion failed",
-                                      component="conversion",
-                                      source=str(nc_file),
-                                      error=str(e))
-                                files_failed += 1
-                    
-                    # Organize remaining NC files
-                    self._organize_nc_files(year_path)
+                        # Extract date information from filename for TIFF naming
+                        # Try to extract YYYYMMDD pattern from filename
+                        import re
+                        date_match = re.search(r'(\d{8})', nc_file.name)
+                        if date_match:
+                            date_str = date_match.group(1)
+                            tif_file = year_path / f"{var_config['output_dir']}_{date_str}.tif"
+                        else:
+                            # Fallback to simple naming
+                            base_name = nc_file.stem
+                            tif_file = year_path / f"{var_config['output_dir']}_{base_name}.tif"
+                        
+                        conversion_tasks.append({
+                            'nc_file': nc_file,
+                            'tif_file': tif_file,
+                            'var_config': var_config,
+                            'new_crs': new_crs,
+                            'dataset_name': dataset_name,
+                            'variable': variable,
+                            'year': year
+                        })
+
+        # Execute conversions in parallel
+        total_conversions = len(conversion_tasks)
+        successful_conversions = 0
+        failed_conversions = 0
+        files_to_delete = []  # Collect NetCDF files for deferred deletion
+        
+        info(f"Starting parallel conversion of {total_conversions} files",
+             component="conversion",
+             total_tasks=total_conversions,
+             max_workers=self.max_workers)
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_task = {
+                executor.submit(self._convert_netcdf_file, task): task
+                for task in conversion_tasks
+            }
+            
+            for future in as_completed(future_to_task):
+                task = future_to_task[future]
+                try:
+                    success = future.result()
+                    if success:
+                        successful_conversions += 1
+                        # Collect files marked for deletion
+                        if task.get('delete_nc', False):
+                            files_to_delete.append(task['nc_file'])
+                    else:
+                        failed_conversions += 1
+                except Exception as e:
+                    failed_conversions += 1
+                    error("Conversion task failed",
+                          component="conversion",
+                          dataset=task['dataset_name'],
+                          variable=task['variable'],
+                          year=task['year'],
+                          source=str(task['nc_file']),
+                          error=str(e))
+
+        # Deferred cleanup of NetCDF files after all conversions are complete
+        if files_to_delete:
+            self._cleanup_netcdf_files_deferred(files_to_delete)
+
+        # Organize remaining NC files for each dataset/variable
+        for dataset_name, dataset_config in self.config['datasets'].items():
+            for variable, var_config in dataset_config['variables'].items():
+                var_path = self.download_data_path / var_config['output_dir']
                 
-                info("Variable conversion completed",
-                     component="conversion",
-                     dataset=dataset_name,
-                     variable=variable,
-                     files_converted=files_converted,
-                     files_failed=files_failed)
+                for year in range(start_year, end_year + 1):
+                    year_path = var_path / str(year)
+                    if year_path.exists():
+                        self._organize_nc_files(year_path)
 
         info("NetCDF to raster conversion completed",
-             component="conversion")
+             component="conversion",
+             total_processed=total_conversions,
+             successful=successful_conversions,
+             failed=failed_conversions,
+             success_rate=f"{(successful_conversions/total_conversions)*100:.1f}%" if total_conversions > 0 else "0%")
 
     def resample_rasters(self):
         """
-        Resample all generated TIFF files to match CHIRPS resolution.
+        Resample all generated TIFF files to match CHIRPS resolution with parallel processing.
         Files are resampled in place to maintain the same naming and location.
         """
         if not self.resampler:
@@ -427,15 +661,15 @@ class CopernicusDownloader:
 
         info("Starting raster resampling for ERA5 data",
              component="resampling",
-             target_resolution=self.resampler.target_resolution)
+             target_resolution=self.resampler.target_resolution,
+             max_workers=self.max_workers)
 
-        total_processed = 0
-        total_successful = 0
-        total_failed = 0
-
+        # Collect all TIFF files that need resampling
+        all_tiff_files = []
+        
         for dataset_name, dataset_config in self.config['datasets'].items():
             for variable, var_config in dataset_config['variables'].items():
-                info("Processing variable for resampling",
+                info("Collecting files for resampling",
                      component="resampling",
                      dataset=dataset_name,
                      variable=variable)
@@ -450,44 +684,104 @@ class CopernicusDownloader:
                     # Find all TIFF files in the year directory
                     tiff_files = list(year_path.glob("*.tif"))
                     
-                    if not tiff_files:
-                        info(f"No TIFF files found for resampling in {year}",
+                    if tiff_files:
+                        all_tiff_files.extend(tiff_files)
+                        info(f"Found {len(tiff_files)} TIFF files for {year}",
                              component="resampling",
                              year=year,
-                             variable=variable)
-                        continue
-                    
-                    info(f"Found {len(tiff_files)} TIFF files to resample",
-                         component="resampling",
-                         year=year,
-                         variable=variable,
-                         file_count=len(tiff_files))
-                    
-                    for tiff_file in tiff_files:
-                        total_processed += 1
-                        
-                        # Resample in place (same file, same location)
-                        success = self.resampler.resample_raster_inplace(
-                            raster_path=tiff_file,
-                            backup=False,  # No backup needed for pipeline processing
-                            resampling_method=Resampling.bilinear
-                        )
-                        
-                        if success:
-                            total_successful += 1
-                        else:
-                            total_failed += 1
-                            error("Failed to resample raster file",
-                                  component="resampling",
-                                  file=str(tiff_file),
-                                  variable=variable,
-                                  year=year)
+                             variable=variable,
+                             file_count=len(tiff_files))
 
+        if not all_tiff_files:
+            info("No TIFF files found for resampling",
+                 component="resampling")
+            return
+
+        info(f"Total TIFF files to resample: {len(all_tiff_files)}",
+             component="resampling",
+             total_files=len(all_tiff_files))
+
+        # Use parallel directory resampling for better performance
+        # Group files by their parent directories
+        dir_groups = {}
+        for tiff_file in all_tiff_files:
+            parent_dir = tiff_file.parent
+            if parent_dir not in dir_groups:
+                dir_groups[parent_dir] = []
+            dir_groups[parent_dir].append(tiff_file)
+
+        total_successful = 0
+        total_failed = 0
+        total_skipped = 0
+
+        # Process each directory group
+        for directory, files_in_dir in dir_groups.items():
+            info(f"Resampling {len(files_in_dir)} files in {directory.name}",
+                 component="resampling",
+                 directory=str(directory),
+                 file_count=len(files_in_dir))
+
+            # Create temporary directory for resampled files
+            temp_resample_dir = directory / "temp_resampled"
+            temp_resample_dir.mkdir(exist_ok=True)
+
+            try:
+                # Prepare file pairs for parallel resampling
+                file_pairs = []
+                for tiff_file in files_in_dir:
+                    temp_output = temp_resample_dir / tiff_file.name
+                    file_pairs.append((tiff_file, temp_output))
+
+                # Use the new parallel resampling method
+                summary = self.resampler.resample_files_parallel(
+                    file_pairs=file_pairs,
+                    resampling_method=Resampling.bilinear,
+                    overwrite=True
+                )
+
+                # Move successfully resampled files back to original location
+                for tiff_file in files_in_dir:
+                    temp_file = temp_resample_dir / tiff_file.name
+                    if temp_file.exists():
+                        # Replace original with resampled version
+                        tiff_file.unlink()
+                        temp_file.rename(tiff_file)
+
+                total_successful += summary["successful"]
+                total_failed += summary["failed"] 
+                total_skipped += summary["skipped"]
+
+                info(f"Directory resampling completed",
+                     component="resampling",
+                     directory=str(directory),
+                     **summary)
+
+            except Exception as e:
+                error("Directory resampling failed",
+                      component="resampling",
+                      directory=str(directory),
+                      error=str(e))
+                total_failed += len(files_in_dir)
+
+            finally:
+                # Clean up temporary directory
+                try:
+                    if temp_resample_dir.exists():
+                        import shutil
+                        shutil.rmtree(temp_resample_dir)
+                except Exception as cleanup_error:
+                    warning("Failed to clean up temporary directory",
+                            component="resampling",
+                            temp_dir=str(temp_resample_dir),
+                            error=str(cleanup_error))
+
+        total_processed = len(all_tiff_files)
         info("Raster resampling completed",
              component="resampling",
              total_processed=total_processed,
              successful=total_successful,
              failed=total_failed,
+             skipped=total_skipped,
              success_rate=f"{(total_successful/total_processed)*100:.1f}%" if total_processed > 0 else "0%")
 
     def clean_rasters(self):

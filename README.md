@@ -15,11 +15,14 @@ Python package for processing spatial historical climate data with a complete ET
 - Data download from CHIRPS and Copernicus sources
 - Spatial clipping by country boundaries
 - Monthly aggregation and climatology calculations
+- **Climate indicators calculation (TR20, TXx, etc.)**
 - GeoServer integration for data publishing
 
 **Key Features:**
 
 - Automated processing of temperature, precipitation, and solar radiation data
+- **Parallel processing for downloads and indicator calculations**
+- **Flexible indicator calculation with custom year ranges**
 - Flexible configuration for multiple countries and variables
 - End-to-end pipeline from raw data to published layers
 - Database-backed configuration management
@@ -50,7 +53,9 @@ pip install git+https://github.com/CIAT-DAPA/aclimate_v3_historical_spatial_etl@
 
 ## 🚀 Basic Usage
 
-1. Command Line Interface
+### 1. Command Line Interface
+
+#### Standard Pipeline
 
 ```bash
 python -m aclimate_v3_historical_spatial_etl.aclimate_run_etl \
@@ -59,17 +64,45 @@ python -m aclimate_v3_historical_spatial_etl.aclimate_run_etl \
   --end_date 2020-12 \
   --data_path /path/to/data \
   --climatology
+```
 
+#### Climate Indicators Calculation
+
+```bash
+python -m aclimate_v3_historical_spatial_etl.aclimate_run_etl \
+  --country HONDURAS \
+  --start_date 2025-01 \
+  --end_date 2025-01 \
+  --data_path /path/to/data \
+  --indicators \
+  --indicator_years 2015-2020
+```
+
+#### Skip Processing (Indicators Only)
+
+```bash
+python -m aclimate_v3_historical_spatial_etl.aclimate_run_etl \
+  --country COLOMBIA \
+  --start_date 2025-01 \
+  --end_date 2025-01 \
+  --data_path /path/to/data \
+  --skip_download \
+  --skip_processing \
+  --indicators \
+  --indicator_years 2010-2020
 ```
 
 > [!NOTE]  
->  Options:
+>  New Options:
 >
 > - `--skip_download`: Skip the data download step
+> - `--skip_processing`: Skip data processing (clipping, monthly aggregation)
 > - `--climatology`: Calculate monthly averages-climatology
+> - `--indicators`: Calculate climate indicators
+> - `--indicator_years YYYY-YYYY`: Specify year range for indicator calculation
 > - `--no_cleanup`: Keep intermediate files after processing
 
-2. Programmatic Usage
+### 2. Programmatic Usage
 
 ```python
 from aclimate_v3_historical_spatial_etl.aclimate_run_etl import run_etl_pipeline
@@ -79,9 +112,10 @@ run_etl_pipeline(
     start_date="2020-01",
     end_date="2020-12",
     data_path="/path/to/data",
-    climatology=True
+    climatology=True,
+    indicators=True,
+    indicator_years="2015-2020"
 )
-
 ```
 
 ## 🗂️ Directory Structure (Auto-generated)
@@ -93,10 +127,29 @@ data/
 ├── process_data/         # Intermediate raster data
 ├── calc_data/
 │   ├── climatology_data/ # Climatology outputs
-│   └── monthly_data/     # Monthly processed rasters
+│   ├── monthly_data/     # Monthly processed rasters
+│   └── indicators_data/  # Climate indicators (TR20, TXx, etc.)
 └── upload_geoserver/     # Output prepared for GeoServer publishing
-
 ```
+
+## 🌡️ Climate Indicators
+
+### Supported Indicators
+
+| Indicator | Name                        | Description                                 | Unit |
+| --------- | --------------------------- | ------------------------------------------- | ---- |
+| **TR20**  | Tropical Days               | Annual count of days with Tmax > 20°C       | days |
+| **TXx**   | Maximum Temperature Maximum | Annual maximum of daily maximum temperature | °C   |
+
+### Indicator Features
+
+- **Parallel Processing**: Multiple years calculated simultaneously
+- **Flexible Year Ranges**: Calculate indicators for any historical period
+- **Raster Output**: Results saved as GeoTIFF files with proper georeferencing
+- **Multi-year Statistics**: Automatic calculation of multi-year averages
+- **Memory Efficient**: Processes data in chunks to handle large datasets
+
+📋 **Detailed Usage Guide**: See [INDICATORS_USAGE.md](INDICATORS_USAGE.md) for comprehensive examples and configuration options.
 
 ## 🔧 Configuration
 

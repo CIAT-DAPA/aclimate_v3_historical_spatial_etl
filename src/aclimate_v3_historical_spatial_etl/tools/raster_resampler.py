@@ -4,6 +4,7 @@ from rasterio.enums import Resampling
 from rasterio.warp import calculate_default_transform, reproject
 from pathlib import Path
 from typing import Union, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from .logging_manager import info, error, warning
 
 
@@ -27,9 +28,13 @@ class RasterResampler:
                   component="resampler")
             raise ValueError("Target resolution must be specified either as parameter or environment variable")
         
+        # Configure parallel processing
+        self.max_workers = int(os.getenv('MAX_PARALLEL_DOWNLOADS', 4))
+        
         info(f"RasterResampler initialized with target resolution: {self.target_resolution} degrees",
              component="resampler",
-             target_resolution=self.target_resolution)
+             target_resolution=self.target_resolution,
+             max_workers=self.max_workers)
     
     def _get_resolution_from_env(self) -> Optional[float]:
         """Get target resolution from environment variable."""
@@ -143,11 +148,59 @@ class RasterResampler:
                   error=str(e))
             return False
     
+    def _resample_single_file(self, task_info: dict) -> dict:
+        """
+        Resample a single file - helper method for parallel processing.
+        
+        Args:
+            task_info: Dictionary with task information including input_file, output_file, resampling_method, overwrite
+            
+        Returns:
+            dict: Result with status and file information
+        """
+        input_file = task_info['input_file']
+        output_file = task_info['output_file']
+        resampling_method = task_info['resampling_method']
+        overwrite = task_info['overwrite']
+        
+        result = {
+            'input_file': str(input_file),
+            'output_file': str(output_file),
+            'status': 'failed',
+            'reason': ''
+        }
+        
+        try:
+            # Check if output file already exists
+            if output_file.exists() and not overwrite:
+                result['status'] = 'skipped'
+                result['reason'] = 'File already exists'
+                return result
+            
+            # Perform resampling
+            if self.resample_raster(input_file, output_file, resampling_method):
+                result['status'] = 'successful'
+                result['reason'] = 'Resampling completed successfully'
+            else:
+                result['status'] = 'failed'
+                result['reason'] = 'Resampling failed'
+                
+        except Exception as e:
+            result['status'] = 'failed'
+            result['reason'] = f'Exception occurred: {str(e)}'
+            error("Single file resampling failed",
+                  component="resampler",
+                  input_file=str(input_file),
+                  output_file=str(output_file),
+                  error=str(e))
+        
+        return result
+
     def resample_directory(self, input_dir: Union[str, Path], output_dir: Union[str, Path],
                           pattern: str = "*.tif", overwrite: bool = False,
                           resampling_method: Resampling = Resampling.bilinear) -> dict:
         """
-        Resample all raster files in a directory.
+        Resample all raster files in a directory with parallel processing.
         
         Args:
             input_dir: Directory containing input raster files
@@ -174,7 +227,8 @@ class RasterResampler:
              component="resampler",
              input_dir=str(input_dir),
              output_dir=str(output_dir),
-             pattern=pattern)
+             pattern=pattern,
+             max_workers=self.max_workers)
         
         summary = {"successful": 0, "failed": 0, "skipped": 0}
         
@@ -192,29 +246,144 @@ class RasterResampler:
              component="resampler",
              file_count=len(raster_files))
         
+        # Prepare tasks for parallel processing
+        tasks = []
         for raster_file in raster_files:
             output_file = output_dir / raster_file.name
+            tasks.append({
+                'input_file': raster_file,
+                'output_file': output_file,
+                'resampling_method': resampling_method,
+                'overwrite': overwrite
+            })
+        
+        # Execute resampling tasks in parallel
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_task = {
+                executor.submit(self._resample_single_file, task): task
+                for task in tasks
+            }
             
-            # Check if output file already exists
-            if output_file.exists() and not overwrite:
-                info(f"Skipping existing file: {raster_file.name}",
-                     component="resampler",
-                     file=str(raster_file))
-                summary["skipped"] += 1
-                continue
-            
-            # Perform resampling
-            if self.resample_raster(raster_file, output_file, resampling_method):
-                summary["successful"] += 1
-            else:
-                summary["failed"] += 1
+            for future in as_completed(future_to_task):
+                task = future_to_task[future]
+                try:
+                    result = future.result()
+                    
+                    if result['status'] == 'successful':
+                        summary["successful"] += 1
+                        info(f"Resampling completed: {Path(result['input_file']).name}",
+                             component="resampler",
+                             file=result['input_file'])
+                    elif result['status'] == 'skipped':
+                        summary["skipped"] += 1
+                        info(f"Skipped existing file: {Path(result['input_file']).name}",
+                             component="resampler",
+                             file=result['input_file'],
+                             reason=result['reason'])
+                    else:
+                        summary["failed"] += 1
+                        error(f"Resampling failed: {Path(result['input_file']).name}",
+                              component="resampler",
+                              file=result['input_file'],
+                              reason=result['reason'])
+                              
+                except Exception as e:
+                    summary["failed"] += 1
+                    error("Task execution failed",
+                          component="resampler",
+                          input_file=str(task['input_file']),
+                          error=str(e))
         
         info(f"Batch resampling completed",
              component="resampler",
-             **summary)
+             total_files=len(raster_files),
+             **summary,
+             success_rate=f"{(summary['successful']/len(raster_files))*100:.1f}%" if len(raster_files) > 0 else "0%")
         
         return summary
     
+    def resample_files_parallel(self, file_pairs: list, 
+                               resampling_method: Resampling = Resampling.bilinear,
+                               overwrite: bool = False) -> dict:
+        """
+        Resample multiple specific files in parallel.
+        
+        Args:
+            file_pairs: List of (input_path, output_path) tuples
+            resampling_method: Resampling algorithm to use
+            overwrite: Whether to overwrite existing files
+            
+        Returns:
+            dict: Summary with counts of successful, failed, and skipped files
+        """
+        if not file_pairs:
+            warning("No file pairs provided for resampling",
+                   component="resampler")
+            return {"successful": 0, "failed": 0, "skipped": 0}
+        
+        info(f"Starting parallel resampling of {len(file_pairs)} files",
+             component="resampler",
+             file_count=len(file_pairs),
+             max_workers=self.max_workers)
+        
+        summary = {"successful": 0, "failed": 0, "skipped": 0}
+        
+        # Prepare tasks for parallel processing
+        tasks = []
+        for input_path, output_path in file_pairs:
+            tasks.append({
+                'input_file': Path(input_path),
+                'output_file': Path(output_path),
+                'resampling_method': resampling_method,
+                'overwrite': overwrite
+            })
+        
+        # Execute resampling tasks in parallel
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_task = {
+                executor.submit(self._resample_single_file, task): task
+                for task in tasks
+            }
+            
+            for future in as_completed(future_to_task):
+                task = future_to_task[future]
+                try:
+                    result = future.result()
+                    
+                    if result['status'] == 'successful':
+                        summary["successful"] += 1
+                        info(f"File resampled successfully: {Path(result['input_file']).name}",
+                             component="resampler",
+                             input_file=result['input_file'],
+                             output_file=result['output_file'])
+                    elif result['status'] == 'skipped':
+                        summary["skipped"] += 1
+                        info(f"File skipped: {Path(result['input_file']).name}",
+                             component="resampler",
+                             input_file=result['input_file'],
+                             reason=result['reason'])
+                    else:
+                        summary["failed"] += 1
+                        error(f"File resampling failed: {Path(result['input_file']).name}",
+                              component="resampler",
+                              input_file=result['input_file'],
+                              reason=result['reason'])
+                              
+                except Exception as e:
+                    summary["failed"] += 1
+                    error("Parallel resampling task failed",
+                          component="resampler",
+                          input_file=str(task['input_file']),
+                          error=str(e))
+        
+        info(f"Parallel resampling completed",
+             component="resampler",
+             total_files=len(file_pairs),
+             **summary,
+             success_rate=f"{(summary['successful']/len(file_pairs))*100:.1f}%" if len(file_pairs) > 0 else "0%")
+        
+        return summary
+
     def resample_raster_inplace(self, raster_path: Union[str, Path],
                                backup: bool = True,
                                resampling_method: Resampling = Resampling.bilinear) -> bool:
