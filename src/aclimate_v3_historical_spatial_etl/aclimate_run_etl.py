@@ -631,7 +631,6 @@ def run_etl_pipeline(args):
                 source_data_path=paths['indicators_data'],
                 upload_base_path=paths['upload_geoserver']
             )
-            
             indicators_config = geoserver_config.get('indicators_data')
             if not indicators_config:
                 warning("No indicators_data config found in geoserver_config - using fallback configuration",
@@ -645,14 +644,12 @@ def run_etl_pipeline(args):
                 for indicator in available_indicators:
                     short_name = indicator.get('short_name', 'unknown')
                     indicators_config['stores'][short_name] = f'climate_index_{iso2}_{short_name}'
-            
             # Process each calculated indicator
             for indicator in available_indicators:
                 indicator_short_name = indicator.get('short_name', 'unknown')
                 info(f"Processing indicator for GeoServer upload", 
                      component="geoserver",
                      indicator=indicator_short_name)
-                
                 upload_dir = indicators_preparer.prepare_for_upload(indicator_short_name)
                 
                 store_name = indicators_config['stores'].get(indicator_short_name)
@@ -667,7 +664,7 @@ def run_etl_pipeline(args):
                 indicators_preparer.upload_to_geoserver(
                     workspace=indicators_config['workspace'],
                     store=store_name,
-                    date_format="yyyy"  # Indicators typically use year format
+                    date_format="yyyy"
                 )
                 clean_directory(paths['upload_geoserver'], True)
             
