@@ -16,7 +16,7 @@ DUMMY_CONFIG = {
             "file_naming": "{variable}_{date}.tif.gz"
         }
     },
-    "parallel_downloads": 2
+    "parallel_downloads": 4
 }
 
 
@@ -96,4 +96,4 @@ class TestChirpsDownloaderInternal:
                 end_date="2023-01",
                 download_data_path=str(tmp_path)
             )
-            assert downloader.cores == 2
+            assert downloader.cores == 4
