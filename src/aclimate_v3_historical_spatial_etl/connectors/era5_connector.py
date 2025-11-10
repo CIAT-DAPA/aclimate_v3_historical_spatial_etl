@@ -527,17 +527,23 @@ class CopernicusDownloader:
              max_workers=self.max_workers)
         
         # Limit conversion workers to prevent segfaults on high-core servers
-        
         cpu_count = multiprocessing.cpu_count()
         
-        if cpu_count >= 8:
-            # High core count server - limit conversion workers to prevent GDAL crashes
-            conversion_workers = 2
-            warning(f"High CPU count detected ({cpu_count} cores), limiting NetCDF conversion to {conversion_workers} workers to prevent segfaults",
+        # Allow manual override of conversion workers
+        conversion_override = os.getenv('ERA5_CONVERSION_WORKERS')
+        if conversion_override:
+            conversion_workers = int(conversion_override)
+            info(f"Using manual override for conversion workers: {conversion_workers}",
+                 component="conversion",
+                 override_workers=conversion_workers)
+        elif cpu_count >= 8:
+            # High core count server - force single worker to prevent GDAL crashes
+            conversion_workers = 1
+            warning(f"High CPU count detected ({cpu_count} cores), forcing single-threaded NetCDF conversion to prevent segfaults",
                     component="conversion",
                     cpu_count=cpu_count,
                     original_workers=self.max_workers,
-                    limited_workers=conversion_workers)
+                    forced_workers=conversion_workers)
         else:
             # Lower core count - safe to use normal workers
             conversion_workers = self.max_workers
