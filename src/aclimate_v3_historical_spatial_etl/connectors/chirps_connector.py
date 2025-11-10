@@ -24,7 +24,7 @@ class ChirpsDownloader:
         self.start_date = start_date
         self.end_date = end_date
         self.tools = Tools()
-        self.cores = self.config.get('parallel_downloads', 4)
+        self.cores = int(os.getenv('MAX_PARALLEL_DOWNLOADS', self.config.get('parallel_downloads', 4)))
         
         self._initialize_paths()
         
