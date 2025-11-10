@@ -5,6 +5,7 @@ import calendar
 from datetime import datetime
 import xarray as xr
 import rioxarray
+import multiprocessing
 import shutil
 from rasterio.enums import Resampling
 from pathlib import Path
@@ -524,6 +525,22 @@ class CopernicusDownloader:
              component="conversion",
              keep_nc_files=self.keep_nc_files,
              max_workers=self.max_workers)
+        
+        # Limit conversion workers to prevent segfaults on high-core servers
+        
+        cpu_count = multiprocessing.cpu_count()
+        
+        if cpu_count >= 8:
+            # High core count server - limit conversion workers to prevent GDAL crashes
+            conversion_workers = 2
+            warning(f"High CPU count detected ({cpu_count} cores), limiting NetCDF conversion to {conversion_workers} workers to prevent segfaults",
+                    component="conversion",
+                    cpu_count=cpu_count,
+                    original_workers=self.max_workers,
+                    limited_workers=conversion_workers)
+        else:
+            # Lower core count - safe to use normal workers
+            conversion_workers = self.max_workers
 
         # Prepare conversion tasks
         conversion_tasks = []
@@ -596,9 +613,9 @@ class CopernicusDownloader:
         info(f"Starting parallel conversion of {total_conversions} files",
              component="conversion",
              total_tasks=total_conversions,
-             max_workers=self.max_workers)
+             max_workers=conversion_workers)
         
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=conversion_workers) as executor:
             future_to_task = {
                 executor.submit(self._convert_netcdf_file, task): task
                 for task in conversion_tasks
