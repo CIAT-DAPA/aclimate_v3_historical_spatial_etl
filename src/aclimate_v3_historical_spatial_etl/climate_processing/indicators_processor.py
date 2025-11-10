@@ -316,8 +316,9 @@ class IndicatorsProcessor:
             # TODO: Implement routing logic based on indicator type/name
             # Now using auto-discovery pattern with CalculatorLoader
             
-            # Create output directory for this indicator
-            indicator_output_dir = self.output_path / f"{indicator_name.lower().replace(' ', '_')}"
+            # Create output directory for this indicator using short_name
+            short_name = indicator.get('short_name', indicator_name.replace(' ', '_'))
+            indicator_output_dir = self.output_path / short_name
             indicator_output_dir.mkdir(parents=True, exist_ok=True)
             
             

@@ -92,7 +92,24 @@ class TXxCalculator(BaseIndicatorCalculator):
                 
                 # Save results
                 if results:
-                    return self._save_txx_results(results, datasets)
+                    success = self._save_txx_results(results, datasets)
+                    
+                    # Clean up temporary download directory
+                    try:
+                        temp_dir = self.output_path / "temp_downloads"
+                        if temp_dir.exists():
+                            import shutil
+                            shutil.rmtree(temp_dir)
+                            info("Temporary download directory cleaned up",
+                                 component="txx_calculator",
+                                 temp_dir=str(temp_dir))
+                    except Exception as e:
+                        warning("Failed to clean up temporary directory",
+                                component="txx_calculator",
+                                temp_dir=str(temp_dir),
+                                error=str(e))
+                    
+                    return success
                 else:
                     error("No TXx results calculated",
                           component="txx_calculator")
@@ -107,6 +124,22 @@ class TXxCalculator(BaseIndicatorCalculator):
                   component="txx_calculator",
                   indicator_code=self.INDICATOR_CODE,
                   error=str(e))
+            
+            # Clean up temporary download directory even on error
+            try:
+                temp_dir = self.output_path / "temp_downloads"
+                if temp_dir.exists():
+                    import shutil
+                    shutil.rmtree(temp_dir)
+                    info("Temporary download directory cleaned up after error",
+                         component="txx_calculator",
+                         temp_dir=str(temp_dir))
+            except Exception as cleanup_error:
+                warning("Failed to clean up temporary directory after error",
+                        component="txx_calculator",
+                        temp_dir=str(temp_dir),
+                        error=str(cleanup_error))
+            
             return False
 
     def _get_geoserver_config(self) -> dict:
@@ -209,21 +242,6 @@ class TXxCalculator(BaseIndicatorCalculator):
                 info("TXx result saved",
                      component="txx_calculator",
                      year=year,
-                     output_file=str(output_path))
-            
-            # Also create a multi-year average if multiple years
-            if len(results) > 1:
-                mean_txx = np.nanmean(list(results.values()), axis=0)
-                output_filename = self._generate_climate_index_filename("mean")
-                output_path = self.output_path / output_filename
-                
-                # Use the first dataset for spatial reference in the mean
-                first_year = list(datasets.keys())[0]
-                first_dataset = datasets[first_year]
-                self._save_as_geotiff(mean_txx, output_path, "mean", first_dataset)
-                
-                info("TXx multi-year average saved",
-                     component="txx_calculator",
                      output_file=str(output_path))
             
             return True

@@ -91,7 +91,24 @@ class TR20Calculator(BaseIndicatorCalculator):
             
             # Save results
             if results:
-                return self._save_tr20_results(results, datasets)
+                success = self._save_tr20_results(results, datasets)
+                
+                # Clean up temporary download directory
+                try:
+                    temp_dir = self.output_path / "temp_downloads"
+                    if temp_dir.exists():
+                        import shutil
+                        shutil.rmtree(temp_dir)
+                        info("Temporary download directory cleaned up",
+                             component="tr20_calculator",
+                             temp_dir=str(temp_dir))
+                except Exception as e:
+                    warning("Failed to clean up temporary directory",
+                            component="tr20_calculator",
+                            temp_dir=str(temp_dir),
+                            error=str(e))
+                
+                return success
             else:
                 error("No TR20 results calculated",
                       component="tr20_calculator")
@@ -102,6 +119,22 @@ class TR20Calculator(BaseIndicatorCalculator):
                   component="tr20_calculator",
                   indicator_code=self.INDICATOR_CODE,
                   error=str(e))
+            
+            # Clean up temporary download directory even on error
+            try:
+                temp_dir = self.output_path / "temp_downloads"
+                if temp_dir.exists():
+                    import shutil
+                    shutil.rmtree(temp_dir)
+                    info("Temporary download directory cleaned up after error",
+                         component="tr20_calculator",
+                         temp_dir=str(temp_dir))
+            except Exception as cleanup_error:
+                warning("Failed to clean up temporary directory after error",
+                        component="tr20_calculator",
+                        temp_dir=str(temp_dir),
+                        error=str(cleanup_error))
+            
             return False
 
     def _get_geoserver_config(self) -> dict:
@@ -211,21 +244,6 @@ class TR20Calculator(BaseIndicatorCalculator):
                 info("TR20 result saved",
                      component="tr20_calculator",
                      year=year,
-                     output_file=str(output_path))
-            
-            # Also create a multi-year average if multiple years
-            if len(results) > 1:
-                mean_tr20 = np.nanmean(list(results.values()), axis=0)
-                output_filename = self._generate_climate_index_filename("mean")
-                output_path = self.output_path / output_filename
-                
-                # Use the first dataset for spatial reference in the mean
-                first_year = list(datasets.keys())[0]
-                first_dataset = datasets[first_year]
-                self._save_as_geotiff(mean_tr20, output_path, -1, first_dataset)
-                
-                info("TR20 multi-year average saved",
-                     component="tr20_calculator",
                      output_file=str(output_path))
             
             return True

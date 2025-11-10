@@ -585,7 +585,7 @@ def run_etl_pipeline(args):
         if args.indicators:
             info("Starting indicators calculation", component="processing")
             
-            # Use indicator-specific years if provided, otherwise use data processing dates or defaults
+            # Use indicator-specific years if provided, otherwise use data processing dates or error
             if indicator_start_year and indicator_end_year:
                 indicator_start_date = f"{indicator_start_year}-01"
                 indicator_end_date = f"{indicator_end_year}-12"
@@ -593,13 +593,10 @@ def run_etl_pipeline(args):
                 indicator_start_date = args.start_date
                 indicator_end_date = args.end_date
             else:
-                # Default fallback dates for indicators-only mode
-                indicator_start_date = "2020-01"
-                indicator_end_date = "2020-12"
-                warning("No dates provided, using default fallback dates for indicators",
-                       component="processing",
-                       default_start=indicator_start_date,
-                       default_end=indicator_end_date)
+                # Error out if no dates are provided for indicators
+                error("No dates provided for indicators calculation. Use --indicator_years or provide --start_date and --end_date",
+                      component="processing")
+                raise ETLError("Indicators calculation requires date range. Use --indicator_years 'YYYY-YYYY' or provide --start_date and --end_date arguments.")
             
             info("Indicators date range determined",
                  component="processing",
@@ -627,16 +624,64 @@ def run_etl_pipeline(args):
                  country=args.country,
                  indicators_count=len(available_indicators),
                  indicators=indicator_names)
+            
+            # Step 6.5: Upload Indicators Data to GeoServer
+            info("Starting GeoServer upload for indicators data", component="geoserver")
+            indicators_preparer = GeoServerUploadPreparer(
+                source_data_path=paths['indicators_data'],
+                upload_base_path=paths['upload_geoserver']
+            )
+            
+            indicators_config = geoserver_config.get('indicators_data')
+            if not indicators_config:
+                warning("No indicators_data config found in geoserver_config - using fallback configuration",
+                       component="geoserver")
+                # Fallback configuration if not present in config
+                indicators_config = {
+                    'workspace': f'climate_index',
+                    'stores': {}
+                }
+                # Generate store names for available indicators
+                for indicator in available_indicators:
+                    short_name = indicator.get('short_name', 'unknown')
+                    indicators_config['stores'][short_name] = f'climate_index_{iso2}_{short_name}'
+            
+            # Process each calculated indicator
+            for indicator in available_indicators:
+                indicator_short_name = indicator.get('short_name', 'unknown')
+                info(f"Processing indicator for GeoServer upload", 
+                     component="geoserver",
+                     indicator=indicator_short_name)
+                
+                upload_dir = indicators_preparer.prepare_for_upload(indicator_short_name)
+                
+                store_name = indicators_config['stores'].get(indicator_short_name)
+                if not store_name:
+                    # Generate fallback store name if not configured
+                    store_name = f'climate_index_{iso2}_{indicator_short_name}'
+                    warning(f"No store name configured for indicator {indicator_short_name}, using fallback",
+                           component="geoserver",
+                           indicator=indicator_short_name,
+                           fallback_store=store_name)
+                
+                indicators_preparer.upload_to_geoserver(
+                    workspace=indicators_config['workspace'],
+                    store=store_name,
+                    date_format="yyyy"  # Indicators typically use year format
+                )
+                clean_directory(paths['upload_geoserver'], True)
+            
+            info("Indicators data GeoServer upload completed", component="geoserver")
         
         # Step 7: Cleanup
         if not args.no_cleanup:
             info("Starting cleanup phase", component="cleanup")
             
-            #clean_directory(paths['raw_data'], True)
-            #clean_directory(paths['processed_data'], True)
+            clean_directory(paths['raw_data'], True)
+            clean_directory(paths['processed_data'], True)
             clean_directory(paths['monthly_data'], True)
             clean_directory(paths['climatology_data'], True)
-            #clean_directory(paths['indicators_data'], True)
+            clean_directory(paths['indicators_data'], True)
             
             info("Cleanup completed", component="cleanup")
         
