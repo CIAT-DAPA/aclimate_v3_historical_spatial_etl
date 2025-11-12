@@ -214,10 +214,10 @@ class BaseIndicatorCalculator(ABC):
             
             if isinstance(year_or_suffix, int):
                 # For specific year: climate_index_co_ndd_2024.tiff
-                return f"climate_index_{iso2}_{short_name}_{year_or_suffix}.tif"
+                return f"climate_index_{self.temporality}_{iso2}_{short_name}_{year_or_suffix}.tif"
             else:
                 # For multi-year averages: climate_index_co_ndd_mean.tiff
-                return f"climate_index_{iso2}_{short_name}_{year_or_suffix}.tif"
+                return f"climate_index_{self.temporality}_{iso2}_{short_name}_{year_or_suffix}.tif"
                 
         except Exception as e:
             error("Failed to generate climate index filename",
@@ -226,4 +226,4 @@ class BaseIndicatorCalculator(ABC):
                   error=str(e))
             # Fallback
             fallback_short = getattr(self, 'short_name', 'unknown')
-            return f"climate_index_{self.country_code.lower()}_{fallback_short}_{year_or_suffix}.tif"
+            return f"climate_index_{self.temporality}_{self.country_code.lower()}_{fallback_short}_{year_or_suffix}.tif"
