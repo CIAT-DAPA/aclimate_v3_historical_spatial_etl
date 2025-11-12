@@ -642,7 +642,8 @@ def run_etl_pipeline(args):
                 # Generate store names for available indicators
                 for indicator in available_indicators:
                     short_name = indicator.get('short_name', 'unknown')
-                    indicators_config['stores'][short_name] = f'climate_index_{iso2}_{short_name}'
+                    temporality = indicator.get('temporality', 'annual')
+                    indicators_config['stores'][short_name] = f'climate_index_{temporality}_{iso2}_{short_name}'
             # Process each calculated indicator
             for indicator in available_indicators:
                 indicator_short_name = indicator.get('short_name', 'unknown')
@@ -654,7 +655,8 @@ def run_etl_pipeline(args):
                 store_name = indicators_config['stores'].get(indicator_short_name)
                 if not store_name:
                     # Generate fallback store name if not configured
-                    store_name = f'climate_index_{iso2}_{indicator_short_name}'
+                    temporality = indicator.get('temporality', 'annual')
+                    store_name = f'climate_index_{temporality}_{iso2}_{indicator_short_name}'
                     warning(f"No store name configured for indicator {indicator_short_name}, using fallback",
                            component="geoserver",
                            indicator=indicator_short_name,
