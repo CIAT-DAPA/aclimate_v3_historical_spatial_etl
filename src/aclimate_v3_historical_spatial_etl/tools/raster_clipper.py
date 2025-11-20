@@ -433,7 +433,7 @@ class RasterClipper:
             return True
             
         except Exception as e:
-            error("Failed to process raster file",
+            error(f"Failed to process raster file {str(e)}",
                   component="processing",
                   input_file=str(input_file),
                   error=str(e))
