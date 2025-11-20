@@ -6,6 +6,9 @@ from typing import Dict, List, Union, Any, Tuple
 import shutil
 import sys
 import json
+import time
+import gc
+import os
 from .connectors import CopernicusDownloader, ChirpsDownloader
 from .tools import RasterClipper, GeoServerUploadPreparer, logging_manager, error, info, warning
 from .climate_processing import MonthlyProcessor, ClimatologyProcessor, IndicatorsProcessor
@@ -16,6 +19,7 @@ class ETLError(Exception):
     """Custom exception for ETL pipeline errors"""
     pass
 #python -m src.aclimate_v3_historical_spatial_etl.aclimate_run_etl --country HONDURAS --start_date 2025-04 --end_date 2025-04 --data_path "D:\\Code\\aclimate_v3_historical_spatial_etl\\data_test"
+#python -m src.aclimate_v3_historical_spatial_etl.aclimate_run_etl --country HONDURAS --skip_processing --indicators --indicator_years 1981 --data_path "D:\\Code\\aclimate_v3_historical_spatial_etl\\data_test"
 def parse_args():
     """Parse simplified command line arguments."""
     info("Parsing command line arguments", component="setup")
@@ -309,8 +313,95 @@ def get_variables_from_config(configs: Dict[str, Any]) -> List[str]:
               error=str(e))
         raise ETLError(f"Could not read variables from config: {str(e)}")
 
-def clean_directory(path: Path, force: bool = False):
-    """Clean directory contents with safety checks."""
+def force_cleanup_resources():
+    """Force cleanup of resources that might be holding file handles"""
+    try:
+        # Force multiple rounds of garbage collection
+        for _ in range(5):
+            gc.collect()
+            time.sleep(0.2)
+        
+        # Additional cleanup for Windows
+        if os.name == 'nt':  # Windows
+            # Force finalize any pending objects
+            import weakref
+            # Clear weak references that might be holding file handles
+            weakref.getweakrefs(object())
+        
+        # Longer delay to allow OS to release file handles
+        time.sleep(3.0)
+        
+        info("Forced resource cleanup completed", component="cleanup")
+    except Exception as e:
+        warning("Error during forced resource cleanup",
+               component="cleanup", 
+               error=str(e))
+
+def safe_remove_file(file_path: Path, max_retries: int = 5) -> bool:
+    """
+    Safely remove a file with enhanced retry logic for Windows file locks.
+    
+    Returns:
+        True if file was successfully removed, False otherwise
+    """
+    for attempt in range(max_retries):
+        try:
+            # Multiple attempts to change file permissions on Windows
+            if os.name == 'nt':  # Windows
+                for perm_attempt in range(3):
+                    try:
+                        # Try different permission combinations
+                        if perm_attempt == 0:
+                            os.chmod(file_path, 0o777)
+                        elif perm_attempt == 1:
+                            os.chmod(file_path, 0o666)
+                        else:
+                            os.chmod(file_path, 0o644)
+                        break
+                    except (OSError, PermissionError):
+                        time.sleep(0.1)
+                        continue
+            
+            # Force garbage collection before removal attempt
+            gc.collect()
+            time.sleep(0.1)
+            
+            # Try to remove the file
+            file_path.unlink()
+            return True
+            
+        except (OSError, PermissionError) as e:
+            if attempt < max_retries - 1:
+                if any(error_text in str(e).lower() for error_text in 
+                       ["being used by another process", "winError 32", "access is denied", "sharing violation"]):
+                    
+                    # Exponential backoff: 1s, 2s, 4s, 8s
+                    wait_time = 2 ** attempt
+                    warning(f"File locked, retrying in {wait_time} seconds (attempt {attempt + 1}/{max_retries})",
+                           component="cleanup",
+                           file=str(file_path))
+                    
+                    # Multiple rounds of cleanup during wait
+                    for _ in range(wait_time):
+                        gc.collect()
+                        time.sleep(1)
+                else:
+                    # Different error, don't retry
+                    error(f"Non-recoverable file error: {str(e)}",
+                          component="cleanup",
+                          file=str(file_path))
+                    break
+            else:
+                # Final attempt failed
+                error(f"Could not remove file after {max_retries} attempts: {str(e)}",
+                      component="cleanup",
+                      file=str(file_path))
+                return False
+    
+    return False
+
+def clean_directory(path: Path, force: bool = False, max_retries: int = 3, retry_delay: int = 1):
+    """Clean directory contents with safety checks and retry logic for Windows file locks."""
     if not path.exists():
         warning("Directory does not exist - skipping cleanup",
                component="cleanup",
@@ -332,29 +423,101 @@ def clean_directory(path: Path, force: bool = False):
                    path=str(path))
             return
     
-    try:
-        items_deleted = 0
-        # Convert to list to avoid iterator issues during deletion
-        items_to_delete = list(path.glob("*"))
-        
-        for item in items_to_delete:
-            if item.is_file():
-                item.unlink()
-                items_deleted += 1
-            elif item.is_dir():
-                shutil.rmtree(item)
-                items_deleted += 1
+    # Force garbage collection to release any open file handles
+    gc.collect()
+    
+    retry_count = 0
+    items_deleted = 0
+    failed_items = []
+    
+    while retry_count <= max_retries:
+        try:
+            # Convert to list to avoid iterator issues during deletion
+            items_to_delete = list(path.glob("*"))
+            failed_items_this_round = []
+            
+            for item in items_to_delete:
+                try:
+                    if item.is_file():
+                        # Use safe removal for files
+                        if safe_remove_file(item):
+                            items_deleted += 1
+                        else:
+                            failed_items_this_round.append(str(item))
+                    elif item.is_dir():
+                        # For directories, use shutil.rmtree with error handling
+                        def handle_remove_readonly(func, path, exc):
+                            if os.name == 'nt':  # Windows
+                                try:
+                                    os.chmod(path, 0o777)
+                                    func(path)
+                                except (OSError, PermissionError):
+                                    pass
+                        
+                        shutil.rmtree(item, onerror=handle_remove_readonly)
+                        items_deleted += 1
+                        
+                except (OSError, PermissionError) as e:
+                    if "being used by another process" in str(e) or "WinError 32" in str(e):
+                        failed_items_this_round.append(str(item))
+                        warning(f"File is being used by another process, will retry",
+                               component="cleanup",
+                               file=str(item),
+                               retry_count=retry_count)
+                    else:
+                        error(f"Failed to delete item: {str(e)}",
+                              component="cleanup",
+                              item=str(item),
+                              error=str(e))
+                        failed_items_this_round.append(str(item))
+            
+            # If no failed items, we're done
+            if not failed_items_this_round:
+                info("Directory cleanup completed",
+                     component="cleanup",
+                     path=str(path),
+                     items_deleted=items_deleted,
+                     retries_used=retry_count)
+                return
+            
+            # Store failed items for next retry
+            failed_items = failed_items_this_round
+            retry_count += 1
+            
+            if retry_count <= max_retries:
+                info(f"Retrying cleanup in {retry_delay} seconds",
+                     component="cleanup",
+                     path=str(path),
+                     failed_items_count=len(failed_items),
+                     retry_count=retry_count)
+                time.sleep(retry_delay)
+                # Force garbage collection again before retry
+                gc.collect()
                 
+        except Exception as e:
+            error(f"Unexpected error during cleanup: {str(e)}",
+                  component="cleanup",
+                  path=str(path),
+                  error=str(e))
+            retry_count += 1
+            if retry_count <= max_retries:
+                time.sleep(retry_delay)
+                gc.collect()
+    
+    # If we get here, some items couldn't be deleted
+    if failed_items:
+        warning(f"Could not delete {len(failed_items)} items after {max_retries} retries",
+               component="cleanup",
+               path=str(path),
+               failed_items=failed_items[:5],  # Show first 5 failed items
+               items_deleted=items_deleted)
+        # Don't raise an error, just log the warning and continue
+    else:
         info("Directory cleanup completed",
              component="cleanup",
              path=str(path),
-             items_deleted=items_deleted)
-    except Exception as e:
-        error(f"Failed to clean directory {str(path)}",
-              component="cleanup",
-              path=str(path),
-              error=str(e))
-        raise ETLError(f"Failed to clean directory {str(path)}: {str(e)}")
+             items_deleted=items_deleted,
+             retries_used=retry_count)
 
 def run_etl_pipeline(args):
     """Execute the enhanced ETL pipeline with dynamic store naming."""
@@ -473,6 +636,7 @@ def run_etl_pipeline(args):
                     store=store_name,
                     date_format="yyyyMMdd"
                 )
+                force_cleanup_resources()
                 clean_directory(paths['upload_geoserver'], True)
             
             info("Raw data GeoServer upload completed", component="geoserver")
@@ -517,6 +681,7 @@ def run_etl_pipeline(args):
                     store=store_name,
                     date_format="yyyyMM"
                 )
+                force_cleanup_resources()
                 clean_directory(paths['upload_geoserver'], True)
             
             info("Monthly processing and upload completed", component="processing")
@@ -576,6 +741,7 @@ def run_etl_pipeline(args):
                     store=store_name,
                     date_format="yyyyMM"
                 )
+                force_cleanup_resources()
                 clean_directory(paths['upload_geoserver'], True)
             
             info("Climatology processing and upload completed", component="processing")
@@ -667,6 +833,7 @@ def run_etl_pipeline(args):
                     store=store_name,
                     date_format="yyyy"
                 )
+                force_cleanup_resources()
                 clean_directory(paths['upload_geoserver'], True)
             
             info("Indicators data GeoServer upload completed", component="geoserver")
@@ -674,6 +841,9 @@ def run_etl_pipeline(args):
         # Step 7: Cleanup
         if not args.no_cleanup:
             info("Starting cleanup phase", component="cleanup")
+            
+            # Force cleanup of resources before final directory cleanup
+            force_cleanup_resources()
             
             clean_directory(paths['raw_data'], True)
             clean_directory(paths['processed_data'], True)
