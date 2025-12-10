@@ -193,11 +193,6 @@ class RX1DAYCalculator(BaseIndicatorCalculator):
             
             # Check if values are in m/day (very small values) and convert to mm/day
             valid_values = precip_values[~np.isnan(precip_values)]
-            if len(valid_values) > 0 and np.max(valid_values) < 1 and np.max(valid_values) > 0:
-                precip_values = precip_values * 1000  # Convert from m to mm
-                info("Converted precipitation from m to mm",
-                     component="rx1day_calculator",
-                     year=year)
             
             # Calculate maximum precipitation for each pixel across all days
             rx1day_values = np.nanmax(precip_values, axis=0)
