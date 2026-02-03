@@ -1,23 +1,18 @@
 
 import argparse
 from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Union, Any, Tuple
-import shutil
 import sys
-import json
-import time
-import gc
-import os
-from .connectors import CopernicusDownloader, ChirpsDownloader
-from .tools import RasterClipper, GeoServerUploadPreparer, logging_manager, error, info, warning
+from .connectors import LocalDataConnector
+from .tools import (
+    RasterClipper, GeoServerUploadPreparer, logging_manager, error, info, warning,
+    force_cleanup_resources, clean_directory, setup_directory_structure,
+    load_config_with_iso2, get_variables_from_config, validate_dates,
+    validate_indicator_years, execute_download_pipeline, ETLError
+)
 from .climate_processing import MonthlyProcessor, ClimatologyProcessor, IndicatorsProcessor
-from aclimate_v3_orm.services import MngDataSourceService
 from aclimate_v3_orm.database.base import create_tables
 
-class ETLError(Exception):
-    """Custom exception for ETL pipeline errors"""
-    pass
+
 #python -m src.aclimate_v3_historical_spatial_etl.aclimate_run_etl --country HONDURAS --start_date 2025-04 --end_date 2025-04 --data_path "D:\\Code\\aclimate_v3_historical_spatial_etl\\data_test"
 #python -m src.aclimate_v3_historical_spatial_etl.aclimate_run_etl --country HONDURAS --skip_processing --indicators --indicator_years 1981 --data_path "D:\\Code\\aclimate_v3_historical_spatial_etl\\data_test"
 def parse_args():
@@ -30,9 +25,11 @@ def parse_args():
     parser.add_argument("--start_date", help="Start date in YYYY-MM format (required unless using --skip_processing with --indicators)")
     parser.add_argument("--end_date", help="End date in YYYY-MM format (required unless using --skip_processing with --indicators)")
     parser.add_argument("--data_path", required=True, help="Base directory for all data")
+    parser.add_argument("--local_data_path", help="Path to local data repository root (e.g., 'D:\\CIAT\\spatial_data_test'). If provided, enables local data validation and storage.")
     # Pipeline control flags
     parser.add_argument("--skip_download", action="store_true", help="Skip data download step")
     parser.add_argument("--skip_processing", action="store_true", help="Skip all data processing steps (download, clipping, monthly aggregation, climatology) - useful for indicators-only runs")
+    parser.add_argument("--download_only", action="store_true", help="Only perform data download to feed local repository, skip all other processing")
     parser.add_argument("--climatology", action="store_true", help="Calculate climatology")
     parser.add_argument("--indicators", action="store_true", help="Calculate climate indicators")
     parser.add_argument("--indicator_years", type=str, help="Year range for indicator calculation (e.g., '2020-2023')")
@@ -43,8 +40,18 @@ def parse_args():
     
     # Custom validation for start_date and end_date
     indicators_only = args.skip_processing and args.indicators
+    download_only = args.download_only
     
-    if not indicators_only:
+    # For download_only mode, start_date and end_date are always required
+    if download_only:
+        if not args.start_date:
+            parser.error("--start_date is required when using --download_only")
+        if not args.end_date:
+            parser.error("--end_date is required when using --download_only")
+        if not args.local_data_path:
+            parser.error("--local_data_path is required when using --download_only")
+    
+    if not indicators_only and not download_only:
         # For regular processing, start_date and end_date are required
         if not args.start_date:
             parser.error("--start_date is required when not using --skip_processing with --indicators")
@@ -60,464 +67,6 @@ def parse_args():
          args=vars(args))
     return args
 
-def validate_dates(start_date: str, end_date: str):
-    """Validate date format and range."""
-    try:
-        info("Validating date range", 
-             component="validation",
-             start_date=start_date,
-             end_date=end_date)
-        
-        start = datetime.strptime(start_date, "%Y-%m")
-        end = datetime.strptime(end_date, "%Y-%m")
-        if start > end:
-            raise ETLError("Start date must be before end date")
-            
-        info("Date validation successful", component="validation")
-    except ValueError as e:
-        error("Invalid date format", 
-              component="validation",
-              error=str(e))
-        raise ETLError(f"Invalid date format. Use YYYY-MM. Error: {str(e)}")
-
-def validate_indicator_years(indicator_years: str) -> Tuple[str, str]:
-    """
-    Validate and parse indicator year range.
-    
-    Args:
-        indicator_years: Year range string in format 'YYYY-YYYY' or single year 'YYYY'
-        
-    Returns:
-        Tuple of (start_year, end_year)
-    """
-    try:
-        if not indicator_years:
-            raise ValueError("Indicator years range is required")
-        
-        # Handle single year format
-        if '-' not in indicator_years:
-            try:
-                year = int(indicator_years)
-                if year < 1900 or year > 2030:
-                    raise ValueError("Year must be between 1900 and 2030")
-                
-                info("Single year indicator calculation",
-                     component="validation",
-                     year=year)
-                
-                return str(year), str(year)
-            except ValueError as e:
-                if "must be between" in str(e):
-                    raise e
-                raise ValueError("Invalid year format. Use 'YYYY' or 'YYYY-YYYY' format")
-        
-        # Handle year range format
-        start_year_str, end_year_str = indicator_years.split('-', 1)
-        
-        # Validate year format
-        start_year = int(start_year_str)
-        end_year = int(end_year_str)
-        
-        if start_year > end_year:
-            raise ValueError("Start year must be before or equal to end year")
-        
-        if start_year < 1900 or end_year > 2030:
-            raise ValueError("Years must be between 1900 and 2030")
-        
-        info("Indicator years validation successful",
-             component="validation",
-             start_year=start_year,
-             end_year=end_year)
-        
-        return str(start_year), str(end_year)
-        
-    except ValueError as e:
-        error("Invalid indicator years format",
-              component="validation",
-              indicator_years=indicator_years,
-              error=str(e))
-        raise ETLError(f"Invalid indicator years format. Use 'YYYY' or 'YYYY-YYYY'. Error: {str(e)}")
-
-def setup_directory_structure(base_path: Path, country_name: str) -> Dict[str, Union[Dict[str, Any], Path]]:
-    """Create directory structure and load configurations using DataSourceService."""
-    info("Setting up directory structure and loading configurations",
-         component="setup",
-         base_path=str(base_path))
-
-    # 1. Setup directory paths (sin el directorio config)
-    paths = {
-        'raw_data': base_path / "raw_data",
-        'processed_data': base_path / "process_data",
-        'calc_data': base_path / "calc_data",
-        'climatology_data': base_path / "calc_data" / "climatology_data",
-        'monthly_data': base_path / "calc_data" / "monthly_data",
-        'indicators_data': base_path / "calc_data" / "indicators_data",
-        'upload_geoserver': base_path / "upload_geoserver"
-    }
-
-    # 2. Configuraciones requeridas
-    required_configs = {
-        "chirps_config": None,
-        "clipping_config": None,
-        "copernicus_config": None,
-        "naming_config": None,
-        "geoserver_config": None
-    }
-
-    # 3. Obtener configuraciones usando el servicio
-    data_source_service = MngDataSourceService()
-    loaded_configs = {}
-    missing_configs = []
-
-    for config_name in required_configs.keys():
-        try:
-            # Buscar en la base de datos usando el servicio
-            db_config = data_source_service.get_by_name_and_country(name=f"{config_name}", country_name=country_name)
-            
-            if not db_config or not db_config.content:
-                missing_configs.append(config_name)
-                continue
-
-            # Parsear el contenido JSON
-            config_content = json.loads(db_config.content)
-            loaded_configs[config_name] = config_content
-            info(f"Config loaded successfully {config_name}",
-                 component="setup",
-                 config_name=config_name)
-
-        except json.JSONDecodeError as e:
-            error(f"Invalid JSON in configuration {config_name}",
-                  component="setup",
-                  config_name=config_name,
-                  error=str(e))
-            missing_configs.append(config_name)
-        except Exception as e:
-            error(f"Failed to load configuration {config_name}",
-                  component="setup",
-                  config_name=config_name,
-                  error=str(e))
-            missing_configs.append(config_name)
-
-    if missing_configs:
-        error(f"Missing or invalid configurations: {', '.join(missing_configs)}",
-              component="setup",
-              missing_configs=missing_configs)
-        raise ETLError(f"Missing or invalid configs: {', '.join(missing_configs)}")
-
-    for path in paths.values():
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-            info(f"Directory created/verified",
-                 component="setup",
-                 path=str(path))
-        except Exception as e:
-            error("Failed to create directory",
-                  component="setup",
-                  path=str(path),
-                  error=str(e))
-            raise ETLError(f"Could not create directory {path}: {str(e)}")
-
-    return {
-        'paths': paths,
-        'configs': loaded_configs
-    }
-
-
-def load_config_with_iso2(configs: Dict[str, Any], country: str) -> tuple:
-    """Load both geoserver and clipping configs and extract ISO2 code."""
-    try:
-        info("Processing configuration from database", 
-             component="config",
-             country=country)
-        
-        # Get clipping config from loaded configs
-        clipping_config = configs["clipping_config"]
-        if not clipping_config:
-            error("Clipping config not found in loaded configurations",
-                  component="config")
-            raise ETLError("Clipping configuration not found in database")
-            
-        # Get ISO2 code for the country
-        country_data = clipping_config["countries"].get(country.upper())
-        if not country_data:
-            error("Country not found in config",
-                  component="config",
-                  country=country)
-            raise ETLError(f"Country '{country}' not found in clipping config")
-        
-        iso2 = country_data.get("iso2_code")
-        if not iso2:
-            error("ISO2 code missing for country",
-                  component="config",
-                  country=country)
-            raise ETLError(f"No ISO2 code found for country '{country}'")
-        
-        # Get geoserver config
-        geoserver_config = configs.get("geoserver_config")
-        if not geoserver_config:
-            error("Geoserver config not found in loaded configurations",
-                  component="config")
-            raise ETLError("Geoserver configuration not found in database")
-        
-        # Process store names to replace [iso2] with actual code
-        for data_type in geoserver_config.values():
-            if "stores" in data_type:
-                for var_name, store_name in data_type["stores"].items():
-                    if "[iso2]" in store_name:
-                        data_type["stores"][var_name] = store_name.replace("[iso2]", iso2)
-        
-        info("Configuration processed successfully",
-             component="config",
-             iso2_code=iso2)
-        return geoserver_config, iso2
-            
-    except KeyError as e:
-        error("Missing required key in configuration",
-              component="config",
-              error=str(e))
-        raise ETLError(f"Missing key in configuration: {str(e)}")
-    except Exception as e:
-        error("Failed to process configs",
-              component="config",
-              error=str(e))
-        raise ETLError(f"Could not process configurations: {str(e)}")
-
-def get_variables_from_config(configs: Dict[str, Any]) -> List[str]:
-    """Extract variables from naming config."""
-    try:
-        info("Extracting variables from naming config",
-             component="config")
-        
-        naming_config = configs["naming_config"]
-        if not naming_config:
-            error("Naming config not found in loaded configurations",
-                  component="config")
-            raise ETLError("Naming configuration not found in database")
-        
-        variable_mapping = naming_config["file_naming"]["components"]["variable_mapping"]
-        variables = list(variable_mapping.keys())
-        
-        info("Variables extracted successfully",
-             component="config",
-             variables=variables)
-        return variables
-        
-    except KeyError as e:
-        error("Missing required key in naming config",
-              component="config",
-              error=str(e))
-        raise ETLError(f"Missing key in naming configuration: {str(e)}")
-    except Exception as e:
-        error("Failed to extract variables from config",
-              component="config",
-              error=str(e))
-        raise ETLError(f"Could not read variables from config: {str(e)}")
-
-def force_cleanup_resources():
-    """Force cleanup of resources that might be holding file handles"""
-    try:
-        # Force multiple rounds of garbage collection
-        for _ in range(5):
-            gc.collect()
-            time.sleep(0.2)
-        
-        # Additional cleanup for Windows
-        if os.name == 'nt':  # Windows
-            # Force finalize any pending objects
-            import weakref
-            # Clear weak references that might be holding file handles
-            weakref.getweakrefs(object())
-        
-        # Longer delay to allow OS to release file handles
-        time.sleep(3.0)
-        
-        info("Forced resource cleanup completed", component="cleanup")
-    except Exception as e:
-        warning("Error during forced resource cleanup",
-               component="cleanup", 
-               error=str(e))
-
-def safe_remove_file(file_path: Path, max_retries: int = 5) -> bool:
-    """
-    Safely remove a file with enhanced retry logic for Windows file locks.
-    
-    Returns:
-        True if file was successfully removed, False otherwise
-    """
-    for attempt in range(max_retries):
-        try:
-            # Multiple attempts to change file permissions on Windows
-            if os.name == 'nt':  # Windows
-                for perm_attempt in range(3):
-                    try:
-                        # Try different permission combinations
-                        if perm_attempt == 0:
-                            os.chmod(file_path, 0o777)
-                        elif perm_attempt == 1:
-                            os.chmod(file_path, 0o666)
-                        else:
-                            os.chmod(file_path, 0o644)
-                        break
-                    except (OSError, PermissionError):
-                        time.sleep(0.1)
-                        continue
-            
-            # Force garbage collection before removal attempt
-            gc.collect()
-            time.sleep(0.1)
-            
-            # Try to remove the file
-            file_path.unlink()
-            return True
-            
-        except (OSError, PermissionError) as e:
-            if attempt < max_retries - 1:
-                if any(error_text in str(e).lower() for error_text in 
-                       ["being used by another process", "winError 32", "access is denied", "sharing violation"]):
-                    
-                    # Exponential backoff: 1s, 2s, 4s, 8s
-                    wait_time = 2 ** attempt
-                    warning(f"File locked, retrying in {wait_time} seconds (attempt {attempt + 1}/{max_retries})",
-                           component="cleanup",
-                           file=str(file_path))
-                    
-                    # Multiple rounds of cleanup during wait
-                    for _ in range(wait_time):
-                        gc.collect()
-                        time.sleep(1)
-                else:
-                    # Different error, don't retry
-                    error(f"Non-recoverable file error: {str(e)}",
-                          component="cleanup",
-                          file=str(file_path))
-                    break
-            else:
-                # Final attempt failed
-                error(f"Could not remove file after {max_retries} attempts: {str(e)}",
-                      component="cleanup",
-                      file=str(file_path))
-                return False
-    
-    return False
-
-def clean_directory(path: Path, force: bool = False, max_retries: int = 3, retry_delay: int = 1):
-    """Clean directory contents with safety checks and retry logic for Windows file locks."""
-    if not path.exists():
-        warning("Directory does not exist - skipping cleanup",
-               component="cleanup",
-               path=str(path))
-        return
-    
-    if not force:
-        # Check if running in interactive mode
-        if sys.stdin.isatty():
-            response = input(f"Are you sure you want to clean {path}? [y/N]: ")
-            if response.lower() != 'y':
-                info("Cleanup cancelled by user",
-                     component="cleanup",
-                     path=str(path))
-                return
-        else:
-            warning("Non-interactive mode detected - skipping cleanup confirmation",
-                   component="cleanup",
-                   path=str(path))
-            return
-    
-    # Force garbage collection to release any open file handles
-    gc.collect()
-    
-    retry_count = 0
-    items_deleted = 0
-    failed_items = []
-    
-    while retry_count <= max_retries:
-        try:
-            # Convert to list to avoid iterator issues during deletion
-            items_to_delete = list(path.glob("*"))
-            failed_items_this_round = []
-            
-            for item in items_to_delete:
-                try:
-                    if item.is_file():
-                        # Use safe removal for files
-                        if safe_remove_file(item):
-                            items_deleted += 1
-                        else:
-                            failed_items_this_round.append(str(item))
-                    elif item.is_dir():
-                        # For directories, use shutil.rmtree with error handling
-                        def handle_remove_readonly(func, path, exc):
-                            if os.name == 'nt':  # Windows
-                                try:
-                                    os.chmod(path, 0o777)
-                                    func(path)
-                                except (OSError, PermissionError):
-                                    pass
-                        
-                        shutil.rmtree(item, onerror=handle_remove_readonly)
-                        items_deleted += 1
-                        
-                except (OSError, PermissionError) as e:
-                    if "being used by another process" in str(e) or "WinError 32" in str(e):
-                        failed_items_this_round.append(str(item))
-                        warning(f"File is being used by another process, will retry",
-                               component="cleanup",
-                               file=str(item),
-                               retry_count=retry_count)
-                    else:
-                        error(f"Failed to delete item: {str(e)}",
-                              component="cleanup",
-                              item=str(item),
-                              error=str(e))
-                        failed_items_this_round.append(str(item))
-            
-            # If no failed items, we're done
-            if not failed_items_this_round:
-                info("Directory cleanup completed",
-                     component="cleanup",
-                     path=str(path),
-                     items_deleted=items_deleted,
-                     retries_used=retry_count)
-                return
-            
-            # Store failed items for next retry
-            failed_items = failed_items_this_round
-            retry_count += 1
-            
-            if retry_count <= max_retries:
-                info(f"Retrying cleanup in {retry_delay} seconds",
-                     component="cleanup",
-                     path=str(path),
-                     failed_items_count=len(failed_items),
-                     retry_count=retry_count)
-                time.sleep(retry_delay)
-                # Force garbage collection again before retry
-                gc.collect()
-                
-        except Exception as e:
-            error(f"Unexpected error during cleanup: {str(e)}",
-                  component="cleanup",
-                  path=str(path),
-                  error=str(e))
-            retry_count += 1
-            if retry_count <= max_retries:
-                time.sleep(retry_delay)
-                gc.collect()
-    
-    # If we get here, some items couldn't be deleted
-    if failed_items:
-        warning(f"Could not delete {len(failed_items)} items after {max_retries} retries",
-               component="cleanup",
-               path=str(path),
-               failed_items=failed_items[:5],  # Show first 5 failed items
-               items_deleted=items_deleted)
-        # Don't raise an error, just log the warning and continue
-    else:
-        info("Directory cleanup completed",
-             component="cleanup",
-             path=str(path),
-             items_deleted=items_deleted,
-             retries_used=retry_count)
 
 def run_etl_pipeline(args):
     """Execute the enhanced ETL pipeline with dynamic store naming."""
@@ -555,36 +104,45 @@ def run_etl_pipeline(args):
              variables=variables,
              iso2_code=iso2)
         
-        # Initialize downloaders
-        copernicus_downloader = None
-        chirps_downloader = None
+        # Initialize local data connector if path provided
+        local_data_connector = None
+        if args.local_data_path:
+            try:
+                local_data_connector = LocalDataConnector(
+                    config=configs["local_data_config"],
+                    local_data_path=args.local_data_path,
+                    copernicus_config=configs["copernicus_config"],
+                    chirps_config=configs["chirps_config"]
+                )
+                info("Local data connector initialized",
+                     component="main",
+                     local_data_path=args.local_data_path)
+            except Exception as e:
+                warning(f"Failed to initialize local data connector: {str(e)}",
+                       component="main")
+                local_data_connector = None
         
-        # Step 1: Data Download
+        # Handle download-only mode
+        if args.download_only:
+            info("Running in download-only mode", component="main")
+            success = execute_download_pipeline(args, configs, paths, local_data_connector)
+            if success:
+                info("Download-only pipeline completed successfully", component="main")
+            else:
+                raise ETLError("Download-only pipeline failed")
+            return
+        
+        # Step 1: Data Download with Local Data Integration
         if not args.skip_download and not args.skip_processing:
             if not args.start_date or not args.end_date:
                 error("start_date and end_date are required for data download", component="download")
                 raise ETLError("start_date and end_date are required when downloading data")
-                
-            info("Starting data download phase", component="download")
-            copernicus_downloader = CopernicusDownloader(
-                config=configs["copernicus_config"],
-                start_date=args.start_date,
-                end_date=args.end_date,
-                download_data_path=paths['raw_data']
-            )
-            copernicus_downloader.main()
-
-            chirps_downloader = ChirpsDownloader(
-                config=configs["chirps_config"],
-                start_date=args.start_date,
-                end_date=args.end_date,
-                download_data_path=paths['raw_data']
-            )
-            chirps_downloader.main()
             
-            info("Data download completed", component="download")
+            success = execute_download_pipeline(args, configs, paths, local_data_connector)
+            if not success:
+                raise ETLError("Download pipeline failed")
         else:
-            info("Skipping data download phase (skip_processing enabled)", component="download")
+            info("Skipping data download phase", component="download")
 
         
         # Step 2: Clipping Data
@@ -607,7 +165,6 @@ def run_etl_pipeline(args):
             info("Data clipping completed", component="clipping")
         else:
             info("Skipping data clipping phase (skip_processing enabled)", component="clipping")
-
         #Step 3: Upload Processed Data to GeoServer
         if not args.skip_processing:
             info("Starting GeoServer upload for raw data", component="geoserver")

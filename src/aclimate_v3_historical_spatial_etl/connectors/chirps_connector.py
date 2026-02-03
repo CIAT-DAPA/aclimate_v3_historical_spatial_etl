@@ -9,7 +9,7 @@ from typing import List, Dict
 class ChirpsDownloader:
     def __init__(self, config: Dict,
                  start_date: str, end_date: str, 
-                 download_data_path: str):
+                 download_data_path: str, local_data_connector=None):
         """
         CHIRPS data downloader and processor.
         
@@ -18,6 +18,7 @@ class ChirpsDownloader:
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
             download_data_path: Temporary download directory
+            local_data_connector: Optional LocalDataConnector for saving downloaded files
         """
         self.config = config
         self.download_data_path = Path(download_data_path)
@@ -25,6 +26,7 @@ class ChirpsDownloader:
         self.end_date = end_date
         self.tools = Tools()
         self.cores = int(os.getenv('MAX_PARALLEL_DOWNLOADS', self.config.get('parallel_downloads', 4)))
+        self.local_data_connector = local_data_connector
         
         self._initialize_paths()
         
@@ -100,6 +102,22 @@ class ChirpsDownloader:
         with ThreadPoolExecutor(max_workers=self.cores) as executor:
             urls = [self._build_download_url(date) for date in dates]
             executor.map(self._download_file, urls, download_paths)
+        
+        # Save downloaded files to local repository if connector is available
+        if self.local_data_connector and self.local_data_connector.config.get('enabled', False):
+            for i, date in enumerate(dates):
+                uncompressed_path = download_paths[i]
+                # Use the uncompressed file path (without .gz extension)
+                if uncompressed_path.exists():
+                    success = self.local_data_connector.save_downloaded_file(
+                        str(uncompressed_path), 'prec', date
+                    )
+                    if success:
+                        info(f"Saved CHIRPS file to local repository",
+                             component="local_save",
+                             variable='prec',
+                             date=date,
+                             file=uncompressed_path.name)
 
         return [p.with_suffix('') for p in download_paths]
 
