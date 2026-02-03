@@ -16,7 +16,8 @@ from ..tools import error, warning, info, RasterResampler
 class CopernicusDownloader:
     def __init__(self, config: Dict,
                  start_date: str, end_date: str, 
-                 download_data_path: str, keep_nc_files: bool = False):
+                 download_data_path: str, keep_nc_files: bool = False,
+                 local_data_connector=None):
         """
         Enhanced ERA5 data processor with support for multiple datasets and formats.
         
@@ -26,12 +27,14 @@ class CopernicusDownloader:
             end_date: End date (YYYY-MM)
             download_data_path: Temporary download directory
             keep_nc_files: Whether to preserve NC files (default: False)
+            local_data_connector: Optional LocalDataConnector for saving downloaded files
         """
         self.config = config
         self.start_date = start_date
         self.end_date = end_date
         self.download_data_path = Path(download_data_path)
         self.keep_nc_files = keep_nc_files
+        self.local_data_connector = local_data_connector
         
         # Configure parallel processing
         self.max_workers = int(os.getenv('MAX_PARALLEL_DOWNLOADS', 4))
@@ -216,12 +219,20 @@ class CopernicusDownloader:
     def download_data(self, dataset_name: Optional[str] = None, 
                      variables: Optional[List[str]] = None,
                      days: Optional[List[str]] = None,
-                     times: Optional[List[str]] = None):
+                     times: Optional[List[str]] = None,
+                     variables_filter: Optional[List[str]] = None):
         """Download data with flexible parameters and parallel processing"""
         dataset_name = dataset_name or self.config['default_dataset']
         dataset_config = self.config['datasets'][dataset_name]
         
-        variables_to_process = variables or list(dataset_config['variables'].keys())
+        # Apply variables filter if provided
+        if variables_filter:
+            variables_to_process = variables_filter
+            info(f"Applying variables filter", 
+                 component="download",
+                 filtered_variables=variables_filter)
+        else:
+            variables_to_process = variables or list(dataset_config['variables'].keys())
         start_year, start_month = map(int, self.start_date.split('-'))
         end_year, end_month = map(int, self.end_date.split('-'))
 
@@ -512,10 +523,14 @@ class CopernicusDownloader:
         
         return False
 
-    def netcdf_to_raster(self):
+    def netcdf_to_raster(self, variables_filter: Optional[List[str]] = None):
         """
         Convert NC to TIFF and organize files by year with parallel processing.
         Auto-deletes NC unless keep_nc_files=True.
+        Saves original NC files to local repository if local_data_connector is configured.
+        
+        Args:
+            variables_filter: List of variables to process. If None, processes all variables.
         """
         new_crs = '+proj=longlat +datum=WGS84 +no_defs'
         start_year, start_month = map(int, self.start_date.split('-'))
@@ -554,6 +569,14 @@ class CopernicusDownloader:
         
         for dataset_name, dataset_config in self.config['datasets'].items():
             for variable, var_config in dataset_config['variables'].items():
+                # Apply variables filter if provided
+                if variables_filter and variable not in variables_filter:
+                    info(f"Skipping variable {variable} (not in filter)",
+                         component="conversion",
+                         variable=variable,
+                         filter=variables_filter)
+                    continue
+                    
                 info("Processing variable for conversion",
                      component="conversion",
                      dataset=dataset_name,
@@ -609,6 +632,25 @@ class CopernicusDownloader:
                             'variable': variable,
                             'year': year
                         })
+                        
+                        # Save original NC file to local repository if connector is available
+                        if self.local_data_connector and self.local_data_connector.config.get('enabled', False):
+                            # Extract date from filename for local repository naming
+                            import re
+                            date_match = re.search(r'(\d{8})', nc_file.name)
+                            if date_match:
+                                date_str = date_match.group(1)
+                                # Convert to YYYY-MM-DD format
+                                formatted_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                                success = self.local_data_connector.save_downloaded_file(
+                                    str(nc_file), variable, formatted_date
+                                )
+                                if success:
+                                    info(f"Saved {variable} file to local repository",
+                                         component="local_save",
+                                         variable=variable,
+                                         date=formatted_date,
+                                         file=nc_file.name)
 
         # Execute conversions in parallel
         total_conversions = len(conversion_tasks)
@@ -669,7 +711,7 @@ class CopernicusDownloader:
              failed=failed_conversions,
              success_rate=f"{(successful_conversions/total_conversions)*100:.1f}%" if total_conversions > 0 else "0%")
 
-    def resample_rasters(self):
+    def resample_rasters(self, variables_filter: Optional[List[str]] = None):
         """
         Resample all generated TIFF files to match CHIRPS resolution with parallel processing.
         Files are resampled in place to maintain the same naming and location.
@@ -692,6 +734,14 @@ class CopernicusDownloader:
         
         for dataset_name, dataset_config in self.config['datasets'].items():
             for variable, var_config in dataset_config['variables'].items():
+                # Apply variables filter if provided
+                if variables_filter and variable not in variables_filter:
+                    info(f"Skipping variable {variable} resampling (not in filter)",
+                         component="resampling",
+                         variable=variable,
+                         filter=variables_filter)
+                    continue
+                    
                 info("Collecting files for resampling",
                      component="resampling",
                      dataset=dataset_name,
@@ -867,15 +917,21 @@ class CopernicusDownloader:
             return [f"{month:02d}" for month in range(1, end_month + 1)]
         return [f"{month:02d}" for month in range(1, 13)]
 
-    def main(self):
-        """Main processing pipeline"""
+    def main(self, variables_filter=None):
+        """
+        Main processing pipeline
+        
+        Args:
+            variables_filter: List of variables to download (e.g., ['tmax', 'tmin']). 
+                            If None, downloads all configured variables.
+        """
         try:
             info("Starting Copernicus downloader main pipeline", component="main")
-            self.download_data()
-            self.netcdf_to_raster()
+            self.download_data(variables_filter=variables_filter)
+            self.netcdf_to_raster(variables_filter=variables_filter)
             
             # Resample ERA5 data to match CHIRPS resolution
-            self.resample_rasters()
+            self.resample_rasters(variables_filter=variables_filter)
             
             info("Copernicus downloader pipeline completed successfully", component="main")
         except Exception as e:

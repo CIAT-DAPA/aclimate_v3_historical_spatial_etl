@@ -1,2 +1,3 @@
 from .era5_connector import CopernicusDownloader
 from .chirps_connector import ChirpsDownloader
+from .local_data_connector import LocalDataConnector
