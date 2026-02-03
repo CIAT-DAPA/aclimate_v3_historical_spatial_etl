@@ -1,0 +1,35 @@
+{
+  "enabled": true,
+  "sources": {
+    "copernicus": {
+      "base_folder": "AgERA5_V2",
+      "variables": {
+        "tmax": {
+          "folder_name": "Maximum Temperature",
+          "file_pattern": "Temperature-Air-2m_Max-24h_C3S-glob-agric_AgERA5_{date}_final-v2.0.0.nc"
+        },
+        "tmin": {
+          "folder_name": "Minimum Temperature", 
+          "file_pattern": "Temperature-Air-2m_Min-24h_C3S-glob-agric_AgERA5_{date}_final-v2.0.0.nc"
+        },
+        "rad": {
+          "folder_name": "Solar Radiation",
+          "file_pattern": "Solar-Radiation-Flux_C3S-glob-agric_AgERA5_{date}_final-v2.0.0.nc"
+        },
+        "et0": {
+          "folder_name": "ETo",
+          "file_pattern": "ReferenceET-PenmanMonteith-FAO56_C3S-glob-agric_AgERA5_{date}_final-v2.0.0.nc"
+        }
+      }
+    },
+    "chirps": {
+      "base_folder": "CHIRPS_V3/CHIRPS_V3_ERA5_Daily",
+      "variables": {
+        "prec": {
+          "folder_name": "",
+          "file_pattern": "chirps-v3.0.{date}.tif"
+        }
+      }
+    }
+  }
+}
