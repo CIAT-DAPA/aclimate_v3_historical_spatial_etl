@@ -13,10 +13,10 @@ from src.aclimate_v3_historical_spatial_etl.tools import info, error, warning
 
 class TR20Calculator(BaseIndicatorCalculator):
     """
-    Calculator for TR20 indicator: Annual count of days with maximum temperature above 20°C.
+    Calculator for TR20 indicator: Annual count of days with minimum temperature above 20°C.
     
-    TR20 represents the number of days in a year where the daily maximum temperature (Tmax)
-    exceeds 20°C. This indicator shows the frequency of warm days annually.
+    TR20 represents the number of days in a year where the daily minimum temperature (Tmin)
+    exceeds 20°C. This indicator shows the frequency of warm nights annually.
     """
 
     INDICATOR_CODE = "TR20"
@@ -26,7 +26,7 @@ class TR20Calculator(BaseIndicatorCalculator):
         """
         Calculate annual TR20 values.
         
-        This method calculates the number of days with maximum temperature above 20°C
+        This method calculates the number of days with minimum temperature above 20°C
         for each year in the specified date range.
         
         Returns:
@@ -52,7 +52,7 @@ class TR20Calculator(BaseIndicatorCalculator):
                 geoserver_workspace=geoserver_config['workspace'],
                 geoserver_layer=geoserver_config['layer'],
                 output_path=self.output_path / "temp_downloads",
-                variable="2m_Maximum_Temperature",
+                variable="2m_Minimum_Temperature",
                 year_range=(start_year, end_year),
                 parallel_downloads=4
             )
@@ -143,8 +143,8 @@ class TR20Calculator(BaseIndicatorCalculator):
             # This should be provided through the config or determined based on country
             # For now, we'll use a basic structure
             workspace = f"climate_historical_daily"
-            layer = f"climate_historical_daily_{self.country_code}_tmax"
-            store = f"climate_historical_daily_{self.country_code}_tmax"
+            layer = f"climate_historical_daily_{self.country_code}_tmin"
+            store = f"climate_historical_daily_{self.country_code}_tmin"
             
             return {
                 'workspace': workspace,
@@ -163,7 +163,7 @@ class TR20Calculator(BaseIndicatorCalculator):
         
         Args:
             year: Year to calculate TR20 for
-            dataset: xarray Dataset with daily temperature data
+            dataset: xarray Dataset with daily minimum temperature data
             
         Returns:
             numpy array with TR20 values, or None if calculation fails
@@ -172,10 +172,10 @@ class TR20Calculator(BaseIndicatorCalculator):
             info("Calculating TR20 for year",
                  component="tr20_calculator",
                  year=year,
-                 dataset_shape=dataset['2m_Maximum_Temperature'].shape)
+                 dataset_shape=dataset['2m_Minimum_Temperature'].shape)
             
             # Get temperature data
-            temp_data = dataset['2m_Maximum_Temperature']
+            temp_data = dataset['2m_Minimum_Temperature']
             
             # Convert temperature to Celsius if needed (assuming data is in Kelvin)
             # Check if temperature values are in Kelvin range (typically > 200)
@@ -186,7 +186,7 @@ class TR20Calculator(BaseIndicatorCalculator):
                      component="tr20_calculator",
                      year=year)
             
-            # Count days where temperature > 20°C for each pixel
+            # Count days where minimum temperature > 20°C for each pixel
             hot_days_mask = temp_values > 20.0
             
             # Count days per pixel (sum along time axis)
@@ -302,7 +302,7 @@ class TR20Calculator(BaseIndicatorCalculator):
                 dst.update_tags(
                     INDICATOR='TR20',
                     YEAR=str(year),
-                    DESCRIPTION='Annual count of days with maximum temperature above 20°C',
+                    DESCRIPTION='Annual count of days with minimum temperature above 20°C',
                     UNITS='days',
                     CREATED=datetime.now().isoformat()
                 )
@@ -378,7 +378,7 @@ class TR20Calculator(BaseIndicatorCalculator):
         """
         Monthly TR20 calculation (not implemented yet).
 
-        This would calculate the number of days with maximum temperature above 20°C for each month.
+        This would calculate the number of days with minimum temperature above 20°C for each month.
         """
         warning("Monthly TR20 calculation not implemented",
                component="tr20_calculator",
