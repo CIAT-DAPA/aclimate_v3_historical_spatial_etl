@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from src.aclimate_v3_historical_spatial_etl.climate_processing.indicators.base_calculator import BaseIndicatorCalculator
-from src.aclimate_v3_historical_spatial_etl.climate_processing.indicators.data_downloader import IndicatorDataDownloader
-from src.aclimate_v3_historical_spatial_etl.tools import info, error, warning
+from ..base_calculator import BaseIndicatorCalculator
+from ..data_downloader import IndicatorDataDownloader
+from ....tools import info, error, warning
 
 
 class TR20Calculator(BaseIndicatorCalculator):

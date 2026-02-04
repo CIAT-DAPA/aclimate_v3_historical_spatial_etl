@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Optional, Tuple
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from src.aclimate_v3_historical_spatial_etl.climate_processing.indicators.percentile_calculator import TemperaturePercentileCalculator
-from src.aclimate_v3_historical_spatial_etl.climate_processing.indicators.data_downloader import IndicatorDataDownloader
-from src.aclimate_v3_historical_spatial_etl.tools import info, error, warning
+from ..percentile_calculator import TemperaturePercentileCalculator
+from ..data_downloader import IndicatorDataDownloader
+from ....tools import info, error, warning
 
 
 class TX90pCalculator(TemperaturePercentileCalculator):

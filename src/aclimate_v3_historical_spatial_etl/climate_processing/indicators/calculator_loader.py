@@ -115,31 +115,43 @@ class CalculatorLoader:
             calculators_found = 0
             
             for name, obj in inspect.getmembers(module, inspect.isclass):
-                # Check if it's a calculator class
-                if (obj != BaseIndicatorCalculator and 
-                    issubclass(obj, BaseIndicatorCalculator) and 
-                    hasattr(obj, 'INDICATOR_CODE') and 
-                    obj.INDICATOR_CODE is not None):
+                # Check if it's a calculator class using duck typing
+                try:
+                    # Skip non-calculator classes
+                    if not name.endswith('Calculator'):
+                        continue
                     
-                    # Validate the calculator class
-                    if cls._validate_calculator_class(obj):
-                        indicator_code = obj.INDICATOR_CODE.upper()
+                    # Skip imported BaseIndicatorCalculator itself
+                    if name == 'BaseIndicatorCalculator':
+                        continue
                         
-                        if indicator_code in cls._calculators:
-                            warning(f"Indicator {indicator_code} already registered, skipping",
-                                   component="calculator_loader",
-                                   existing_class=cls._calculators[indicator_code].__name__,
-                                   new_class=obj.__name__)
-                            continue
+                    # Check required attributes (duck typing approach)
+                    if (hasattr(obj, 'INDICATOR_CODE') and 
+                        obj.INDICATOR_CODE is not None and
+                        hasattr(obj, 'SUPPORTED_TEMPORALITIES')):
                         
-                        cls._calculators[indicator_code] = obj
-                        calculators_found += 1
-                        
-                        info(f"Registered calculator for indicator {indicator_code}",
-                             component="calculator_loader",
-                             indicator_code=indicator_code,
-                             class_name=obj.__name__,
-                             supported_temporalities=getattr(obj, 'SUPPORTED_TEMPORALITIES', []))
+                        # Validate the calculator class
+                        if cls._validate_calculator_class(obj):
+                            indicator_code = obj.INDICATOR_CODE.upper()
+                            
+                            if indicator_code in cls._calculators:
+                                warning(f"Indicator {indicator_code} already registered, skipping",
+                                       component="calculator_loader",
+                                       existing_class=cls._calculators[indicator_code].__name__,
+                                       new_class=obj.__name__)
+                                continue
+                            
+                            cls._calculators[indicator_code] = obj
+                            calculators_found += 1
+                            
+                            info(f"Registered calculator for indicator {indicator_code}",
+                                 component="calculator_loader",
+                                 indicator_code=indicator_code,
+                                 class_name=obj.__name__,
+                                 supported_temporalities=getattr(obj, 'SUPPORTED_TEMPORALITIES', []))
+                except Exception as validation_error:
+                    # Skip classes that fail validation
+                    continue
             
             if calculators_found == 0:
                 warning(f"No valid calculator classes found in {py_file.name}",
