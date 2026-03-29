@@ -245,7 +245,7 @@ def run_etl_pipeline(args):
         else:
             info("Skipping monthly processing and upload (skip_processing enabled)", component="processing")
             # Step 5: Climatology Calculation and Upload
-        if args.climatology and not args.skip_processing:
+        if args.climatology:
             info("Starting climatology calculation", component="processing")
             monthly_config = geoserver_config['monthly_data']
             for variable in variables:
