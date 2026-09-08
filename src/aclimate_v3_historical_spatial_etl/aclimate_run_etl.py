@@ -6,8 +6,8 @@ from .connectors import LocalDataConnector
 from .tools import (
     RasterClipper, GeoServerUploadPreparer, logging_manager, error, info, warning,
     force_cleanup_resources, clean_directory, setup_directory_structure,
-    load_config_with_iso2, get_variables_from_config, validate_dates,
-    validate_indicator_years, execute_download_pipeline, ETLError
+    load_config_with_iso2, get_country_variables_config, resolve_store_workspace,
+    validate_dates, validate_indicator_years, execute_download_pipeline, ETLError
 )
 from .climate_processing import MonthlyProcessor, ClimatologyProcessor, IndicatorsProcessor
 from aclimate_v3_orm.database.base import create_tables
@@ -98,11 +98,21 @@ def run_etl_pipeline(args):
 
         # Load configurations with ISO2 code substitution
         geoserver_config, iso2 = load_config_with_iso2(configs, args.country)
-        variables = get_variables_from_config(configs)
+
+        # Determine which variables must run for this country. Source of truth is the
+        # DB model mng_country_climate_measure (spatial_climate=True), with a fallback
+        # to the naming_config variables when the country has no rows configured.
+        country_vars = get_country_variables_config(args.country, configs)
+        variables = country_vars["output_dirs"]
         info("Configuration loaded",
              component="main",
+             variables_source=country_vars["source"],
              variables=variables,
              iso2_code=iso2)
+
+        # When variables come from the DB, restrict the download/local-take to the
+        # enabled measures. In config fallback mode keep legacy behavior (download all).
+        download_filter = country_vars["short_names"] if country_vars["source"] == "db" else None
         
         # Initialize local data connector if path provided
         local_data_connector = None
@@ -125,7 +135,8 @@ def run_etl_pipeline(args):
         # Handle download-only mode
         if args.download_only:
             info("Running in download-only mode", component="main")
-            success = execute_download_pipeline(args, configs, paths, local_data_connector)
+            success = execute_download_pipeline(args, configs, paths, local_data_connector,
+                                                variables_filter=download_filter)
             if success:
                 info("Download-only pipeline completed successfully", component="main")
             else:
@@ -138,7 +149,8 @@ def run_etl_pipeline(args):
                 error("start_date and end_date are required for data download", component="download")
                 raise ETLError("start_date and end_date are required when downloading data")
             
-            success = execute_download_pipeline(args, configs, paths, local_data_connector)
+            success = execute_download_pipeline(args, configs, paths, local_data_connector,
+                                                variables_filter=download_filter)
             if not success:
                 raise ETLError("Download pipeline failed")
         else:
@@ -174,22 +186,29 @@ def run_etl_pipeline(args):
             )
             
             raw_config = geoserver_config['raw_data']
-            for variable in variables:
-                info(f"Processing variable for GeoServer upload", 
+            for measure in country_vars['measures']:
+                variable = measure['output_dir']
+                info("Processing variable for GeoServer upload",
                      component="geoserver",
-                     variable=variable)
-                
+                     variable=variable,
+                     variables_source=country_vars['source'])
+
                 upload_dir = preparer.prepare_for_upload(variable)
-                
-                store_name = raw_config['stores'].get(variable)
+
+                workspace, store_name = resolve_store_workspace(
+                    measure.get('spatial_climate_conf'),
+                    'daily',
+                    raw_config,
+                    variable
+                )
                 if not store_name:
                     error(f"No store name configured for variable {variable}",
                           component="geoserver",
                           variable=variable)
                     raise ETLError(f"No store name configured for variable {variable} in raw_data")
-                
+
                 preparer.upload_to_geoserver(
-                    workspace=raw_config['workspace'],
+                    workspace=workspace,
                     store=store_name,
                     date_format="yyyyMMdd"
                 )
@@ -219,22 +238,29 @@ def run_etl_pipeline(args):
             )
             
             monthly_config = geoserver_config['monthly_data']
-            for variable in variables:
-                info(f"Processing monthly variable for GeoServer upload",
+            for measure in country_vars['measures']:
+                variable = measure['output_dir']
+                info("Processing monthly variable for GeoServer upload",
                         component="geoserver",
-                        variable=variable)
-                
-                upload_dir = monthly_preparer.prepare_for_upload(f"{variable}")
-                
-                store_name = monthly_config['stores'].get(variable)
+                        variable=variable,
+                        variables_source=country_vars['source'])
+
+                upload_dir = monthly_preparer.prepare_for_upload(variable)
+
+                workspace, store_name = resolve_store_workspace(
+                    measure.get('spatial_climate_conf'),
+                    'monthly',
+                    monthly_config,
+                    variable
+                )
                 if not store_name:
                     error("No store name configured for monthly variable",
                             component="geoserver",
                             variable=variable)
                     raise ETLError(f"No store name configured for variable {variable} in monthly_data")
-                
+
                 monthly_preparer.upload_to_geoserver(
-                    workspace=monthly_config['workspace'],
+                    workspace=workspace,
                     store=store_name,
                     date_format="yyyyMM"
                 )
@@ -248,25 +274,33 @@ def run_etl_pipeline(args):
         if args.climatology:
             info("Starting climatology calculation", component="processing")
             monthly_config = geoserver_config['monthly_data']
-            for variable in variables:
-                info(f"Calculating climatology for variable",
+            for measure in country_vars['measures']:
+                variable = measure['output_dir']
+                info("Calculating climatology for variable",
                      component="processing",
-                     variable=variable)
-                
-                store_name = monthly_config['stores'].get(variable)
+                     variable=variable,
+                     variables_source=country_vars['source'])
+
+                # Climatology is computed from the monthly data, so temporality = monthly.
+                workspace, store_name = resolve_store_workspace(
+                    measure.get('spatial_climate_conf'),
+                    'monthly',
+                    monthly_config,
+                    variable
+                )
                 if not store_name:
                     error("No store name configured for climatology variable",
                           component="processing",
                           variable=variable)
-                    raise ETLError(f"No store name configured for variable {variable} in climatology_data")
+                    raise ETLError(f"No store name configured for variable {variable} in monthly_data")
 
                 climatology_processor = ClimatologyProcessor(
                     output_path=paths['climatology_data'],
                     naming_config=configs["naming_config"],
                     countries_config=configs["clipping_config"],
                     country=args.country,
-                    geoserver_workspace=monthly_config['workspace'],
-                    geoserver_layer=f"{monthly_config['workspace']}:{store_name}",
+                    geoserver_workspace=workspace,
+                    geoserver_layer=f"{workspace}:{store_name}",
                     geoserver_store=store_name,
                     variable=variable
                 )
@@ -279,22 +313,29 @@ def run_etl_pipeline(args):
             )
             
             clim_config = geoserver_config['climatology_data']
-            for variable in variables:
-                info(f"Processing climatology variable for GeoServer upload",
+            for measure in country_vars['measures']:
+                variable = measure['output_dir']
+                info("Processing climatology variable for GeoServer upload",
                      component="geoserver",
-                     variable=variable)
-                    
-                upload_dir = clim_preparer.prepare_for_upload(f"{variable}")
-                
-                store_name = clim_config['stores'].get(variable)
+                     variable=variable,
+                     variables_source=country_vars['source'])
+
+                upload_dir = clim_preparer.prepare_for_upload(variable)
+
+                workspace, store_name = resolve_store_workspace(
+                    measure.get('spatial_climate_conf'),
+                    'climatology',
+                    clim_config,
+                    variable
+                )
                 if not store_name:
                     error("No store name configured for climatology variable",
                           component="geoserver",
                           variable=variable)
                     raise ETLError(f"No store name configured for variable {variable} in climatology_data")
-                
+
                 clim_preparer.upload_to_geoserver(
-                    workspace=clim_config['workspace'],
+                    workspace=workspace,
                     store=store_name,
                     date_format="yyyyMM"
                 )

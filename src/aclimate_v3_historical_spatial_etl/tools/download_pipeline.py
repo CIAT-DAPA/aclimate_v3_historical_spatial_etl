@@ -10,7 +10,8 @@ if TYPE_CHECKING:
 
 
 def execute_download_pipeline(args, configs: Dict[str, Any], paths: Dict[str, Path], 
-                            local_data_connector=None) -> bool:
+                            local_data_connector=None,
+                            variables_filter: List[str] = None) -> bool:
     """
     Execute the download pipeline with local data integration.
     
@@ -38,6 +39,26 @@ def execute_download_pipeline(args, configs: Dict[str, Any], paths: Dict[str, Pa
              copernicus_variables=copernicus_variables,
              chirps_variables=chirps_variables)
         
+        # Apply country climate measures filter (mng_country_climate_measure).
+        # Only variables enabled for the country are downloaded / taken from local.
+        if variables_filter:
+            filter_set = set(variables_filter)
+            copernicus_variables = [v for v in copernicus_variables if v in filter_set]
+            chirps_variables = [v for v in chirps_variables if v in filter_set]
+            info("Variables filtered by country climate measures",
+                 component="download",
+                 variables_filter=sorted(filter_set),
+                 copernicus_variables=copernicus_variables,
+                 chirps_variables=chirps_variables)
+            
+            if not copernicus_variables and not chirps_variables:
+                warning("No variables to download after applying country climate measures filter",
+                        component="download",
+                        variables_filter=sorted(filter_set))
+
+        # Set of variables considered enabled for this run (used to restrict local copy).
+        enabled_variables = set(copernicus_variables) | set(chirps_variables)
+        
         # Check local data availability if local connector is enabled
         variables_to_download = {'copernicus': copernicus_variables, 'chirps': chirps_variables}
         
@@ -49,6 +70,8 @@ def execute_download_pipeline(args, configs: Dict[str, Any], paths: Dict[str, Pa
             
             # Copy available local files to raw_data directory
             for variable, availability in local_availability.items():
+                if variable not in enabled_variables:
+                    continue
                 for date_str in availability['available_locally']:
                     # Pass base raw_data path - LocalDataConnector will handle proper structure
                     success = local_data_connector.copy_local_file(variable, date_str, str(paths['raw_data']))
